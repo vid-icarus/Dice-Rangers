@@ -28,8 +28,8 @@ dice_rangers/          # Main game package
   audio.py             # Sound effects & music management
   constants.py         # Game constants & configuration
 assets/
-  sprites/             # Pixel art character & tile sprites
-  audio/               # Sound effects & music files
+  sprites/             # Pixel art character & tile sprites (placeholders for V1)
+  audio/               # Sound effects & music files (placeholders for V1)
   fonts/               # Pixel fonts
 tests/                 # Test suite
   __init__.py
@@ -55,8 +55,11 @@ Makefile               # Build/test/lint/run targets
 
 ## Key Design Decisions
 - **Pygame** for desktop 2D rendering (not web-based)
+- **Mouse-primary controls** with optional keyboard support (arrow keys + space/enter)
+- **Placeholder art/audio for V1** â colored shapes, simple icons, basic sounds
 - **Shared team HP** (20 morale per team, may revisit after playtesting)
 - **Alternating unit activation** (P1âP2âP1âP2, can't activate same unit twice in a row)
 - **Cosmetic-only customization** (race, outfit, colors, attack flavor have no gameplay effect)
 - **Orthogonal movement, 8-direction attacks** with line-of-sight for ranged
 - **Game logic separated from rendering** for testability
+- **Deterministic RNG seeding** available for tests
