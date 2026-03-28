@@ -1,5 +1,6 @@
 import dice_rangers.game
 
+
 def main():
     dice_rangers.game.main()
 
