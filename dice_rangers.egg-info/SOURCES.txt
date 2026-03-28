@@ -2,6 +2,9 @@ pyproject.toml
 ./dice_rangers/__init__.py
 ./dice_rangers/__main__.py
 ./dice_rangers/game.py
+dice_rangers/__init__.py
+dice_rangers/__main__.py
+dice_rangers/game.py
 dice_rangers.egg-info/PKG-INFO
 dice_rangers.egg-info/SOURCES.txt
 dice_rangers.egg-info/dependency_links.txt
