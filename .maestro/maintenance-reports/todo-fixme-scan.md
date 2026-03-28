@@ -18,6 +18,7 @@ grep -rn -E "TODO|FIXME|HACK|XXX|deprecated|DEPRECATED|@deprecated" \
   --include="Dockerfile" --include="*.sh" \
   --include="*.cfg" --include="*.ini" --include="*.yml" --include="*.yaml" \
   --exclude-dir=".maestro/maintenance-reports" \
+  -B 1 -A 1 \
   /workspace
 ```
 
@@ -29,16 +30,17 @@ A reusable scan script is available at `.maestro/scan_markers.sh` for future run
 
 ## Summary
 
-| Marker Type              | Count |
-|--------------------------|-------|
-| TODO                     | 0     |
-| FIXME                    | 0     |
-| HACK                     | 0     |
-| XXX                      | 0     |
-| deprecated / DEPRECATED / @deprecated | 0 |
-| **Total**                | **0** |
+| Marker Type                           | Count |
+|---------------------------------------|-------|
+| TODO                                  | 0     |
+| FIXME                                 | 0     |
+| HACK                                  | 0     |
+| XXX                                   | 0     |
+| deprecated / DEPRECATED / @deprecated | 0     |
+| **Total**                             | **0** |
 
-> ✅ **No markers found.** The codebase is clean — zero TODO, FIXME, HACK, XXX, or deprecated annotations were detected across all scanned source files.
+> ✅ **No markers found.** The codebase is clean — zero TODO, FIXME, HACK, XXX, or deprecated
+> annotations were detected across all scanned source files.
 
 ---
 
@@ -67,7 +69,11 @@ not included.
 
 ---
 
-## Findings by Marker Type
+## Consolidated Findings Table
+
+All markers from all files are listed here in a single table.
+Surrounding **context** is captured as ±1 line (the line immediately before and after the marker
+line), matching the `-B 1 -A 1` flags used during the scan.
 
 ### Status Key
 
@@ -77,12 +83,20 @@ not included.
 | `Can Remove` | Marker references completed work; comment can be deleted |
 | `Informational` | Marker is a note with no action required |
 
+| Type | File | Line | Content | Context (±1 line) | Status |
+|------|------|------|---------|-------------------|--------|
+| — | — | — | *(No findings — scan returned 0 results)* | — | — |
+
+_The table above will be populated with real findings on future scans as the codebase grows._
+
 ---
+
+## Findings by Marker Type
 
 ### TODO
 
-| File | Line | Content | Context (line before / after) | Status |
-|------|------|---------|-------------------------------|--------|
+| File | Line | Content | Context (±1 line) | Status |
+|------|------|---------|-------------------|--------|
 | — | — | *(none)* | — | — |
 
 _No TODO markers found._
@@ -91,8 +105,8 @@ _No TODO markers found._
 
 ### FIXME
 
-| File | Line | Content | Context (line before / after) | Status |
-|------|------|---------|-------------------------------|--------|
+| File | Line | Content | Context (±1 line) | Status |
+|------|------|---------|-------------------|--------|
 | — | — | *(none)* | — | — |
 
 _No FIXME markers found._
@@ -101,8 +115,8 @@ _No FIXME markers found._
 
 ### HACK
 
-| File | Line | Content | Context (line before / after) | Status |
-|------|------|---------|-------------------------------|--------|
+| File | Line | Content | Context (±1 line) | Status |
+|------|------|---------|-------------------|--------|
 | — | — | *(none)* | — | — |
 
 _No HACK markers found._
@@ -111,8 +125,8 @@ _No HACK markers found._
 
 ### XXX
 
-| File | Line | Content | Context (line before / after) | Status |
-|------|------|---------|-------------------------------|--------|
+| File | Line | Content | Context (±1 line) | Status |
+|------|------|---------|-------------------|--------|
 | — | — | *(none)* | — | — |
 
 _No XXX markers found._
@@ -121,8 +135,8 @@ _No XXX markers found._
 
 ### deprecated / DEPRECATED / @deprecated
 
-| File | Line | Content | Context (line before / after) | Status |
-|------|------|---------|-------------------------------|--------|
+| File | Line | Content | Context (±1 line) | Status |
+|------|------|---------|-------------------|--------|
 | — | — | *(none)* | — | — |
 
 _No deprecated annotations found._
@@ -153,7 +167,7 @@ _No TODO markers exist in the codebase — nothing to cross-reference against co
    This will make future maintenance scans more actionable.
 
 4. **Re-running this scan** — Execute `.maestro/scan_markers.sh` from the repository root at
-   any time to reproduce the raw scan output. Pipe through this report template to update counts.
+   any time to reproduce the raw scan output.
 
 ---
 
