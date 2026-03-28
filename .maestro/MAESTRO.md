@@ -11,7 +11,7 @@ Dice Rangers is a grid-based hot-seat arena battling game built in Python. Playe
 - **Container**: Docker (python:3.12-slim)
 
 ## Project Structure
-\`\`\`
+```
 dice_rangers/          # Main game package
   __init__.py
   __main__.py          # Entry point (python -m dice_rangers)
@@ -24,11 +24,11 @@ Makefile               # Build/test/lint/run targets
 .maestro/
   Dockerfile           # Dev container
   MAESTRO.md           # This file
-\`\`\`
+```
 
 ## Development Commands
-- `make build` â Install package with dev dependencies
-- `make test` â Run tests
-- `make lint` â Lint with Ruff
-- `make run` â Launch the game
-- `make clean` â Remove build artifacts
+- `make build` — Install package with dev dependencies
+- `make test` — Run tests
+- `make lint` — Lint with Ruff
+- `make run` — Launch the game
+- `make clean` — Remove build artifacts
