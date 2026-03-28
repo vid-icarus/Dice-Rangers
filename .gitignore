@@ -13,3 +13,14 @@ __pycache__/
 
 # ruff cache
 .ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# IDE and editor files
+.idea/
+.vscode/
+*.swp
+.DS_Store
