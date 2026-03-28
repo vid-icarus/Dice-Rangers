@@ -1,0 +1,49 @@
+digraph dice_rangers_knowledge {
+    graph [rankdir=LR, label="Dice Rangers Architecture Knowledge", fontsize=14]
+
+    // Component nodes
+    "dice_rangers_pkg" [
+        type="component",
+        level="package",
+        status="active",
+        description="Main game package containing core game logic (dice_rangers/game.py) and package init"
+    ]
+
+    "dice_rangers_main" [
+        type="component",
+        level="module",
+        status="active",
+        description="Entry point module (dice_rangers/__main__.py) that invokes dice_rangers.game.main()"
+    ]
+
+    // Pattern nodes
+    "run_pattern" [
+        type="pattern",
+        level="project",
+        status="active",
+        description="Run the game via 'python -m dice_rangers'; the __main__.py module enables this invocation style"
+    ]
+
+    // Rule nodes
+    "pytest_rule" [
+        type="rule",
+        level="project",
+        status="active",
+        priority="high",
+        description="All tests must be written with pytest and kept passing; run via 'make test' or 'pytest tests/'"
+    ]
+
+    "ruff_rule" [
+        type="rule",
+        level="project",
+        status="active",
+        priority="high",
+        description="All code must pass ruff linting; run via 'make lint' or 'ruff check .'"
+    ]
+
+    // Edges with allowed relation values
+    "dice_rangers_main" -> "dice_rangers_pkg" [relation="calls"]
+    "run_pattern" -> "dice_rangers_main" [relation="uses"]
+    "dice_rangers_pkg" -> "pytest_rule" [relation="must_follow"]
+    "dice_rangers_pkg" -> "ruff_rule" [relation="must_follow"]
+}
