@@ -1,0 +1,28 @@
+[project]
+name = "dice-rangers"
+version = "0.1.0"
+description = "A grid-based hot-seat arena battling game"
+requires-python = ">=3.12"
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0", "ruff>=0.4.0"]
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = {"" = "."}
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["dice_rangers*"]
+
+[tool.ruff]
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
