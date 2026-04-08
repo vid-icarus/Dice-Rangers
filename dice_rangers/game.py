@@ -28,6 +28,7 @@ from dice_rangers.units import (
     AttackResult,
     Customization,
     Unit,
+    can_attack,
     create_unit,
     move_unit,
     reset_activation,
@@ -631,6 +632,131 @@ def do_drop_item(state: GameState, drop_coord: Coordinate) -> None:
     state.pending_drop_item = None
     state.pending_drop_coord = None
     state.phase = Phase.ACTIVATION
+
+
+
+# ---------------------------------------------------------------------------
+# Query / Helper Functions (read-only)
+# ---------------------------------------------------------------------------
+
+_ALL_FALSE_ACTIONS: dict[str, bool] = {
+    "move": False,
+    "attack": False,
+    "use_item": False,
+    "skip": False,
+    "end_turn": False,
+}
+
+
+def get_current_team(state: GameState) -> int:
+    """Return which team's turn it is (1 or 2) based on activation_index."""
+    return 1 if state.activation_index % 2 == 0 else 2
+
+
+def get_team_morale(state: GameState, team: int) -> int:
+    """Return the morale for the given team (1 or 2).
+
+    Raises:
+        ValueError: If team is not 1 or 2.
+    """
+    if team == 1:
+        return state.team1_morale
+    if team == 2:
+        return state.team2_morale
+    raise ValueError(f"Invalid team number: {team!r}. Must be 1 or 2.")
+
+
+def get_attackable_targets(state: GameState) -> list[str]:
+    """Return list of enemy unit IDs the active unit can currently attack."""
+    if state.phase != Phase.ACTIVATION or state.active_unit_id is None:
+        return []
+
+    active_unit = get_unit(state, state.active_unit_id)
+    active_coord = state.board.unit_positions.get(state.active_unit_id)
+    if active_coord is None:
+        return []
+
+    enemy_units = state.team2_units if active_unit.team == 1 else state.team1_units
+    targets: list[str] = []
+    for enemy in enemy_units:
+        enemy_coord = state.board.unit_positions.get(enemy.unit_id)
+        if enemy_coord is None:
+            continue
+        ok, _ = can_attack(active_coord, enemy_coord, state.board)
+        if ok:
+            targets.append(enemy.unit_id)
+    return targets
+
+
+def get_valid_actions(state: GameState) -> dict[str, bool]:
+    """Return a dict of available actions for the active unit.
+
+    Always returns all five keys. Returns all-False when not in ACTIVATION
+    phase or no active unit.
+    """
+    if state.phase != Phase.ACTIVATION or state.active_unit_id is None:
+        return dict(_ALL_FALSE_ACTIONS)
+
+    unit = get_unit(state, state.active_unit_id)
+    return {
+        "move": not unit.has_moved,
+        "attack": (
+            not unit.has_acted and bool(get_attackable_targets(state))
+        ),
+        "use_item": not unit.has_acted and unit.carrying_item is not None,
+        "skip": not unit.has_acted,
+        "end_turn": True,
+    }
+
+
+def get_reachable_squares(state: GameState) -> set[Coordinate]:
+    """Return the set of squares the active unit can move to."""
+    if state.phase != Phase.ACTIVATION or state.active_unit_id is None:
+        return set()
+
+    unit = get_unit(state, state.active_unit_id)
+    if unit.has_moved:
+        return set()
+
+    if state.movement_roll is None:
+        return set()
+
+    current_pos = state.board.unit_positions.get(state.active_unit_id)
+    if current_pos is None:
+        return set()
+
+    candidates = state.board.get_reachable_squares(current_pos, state.movement_roll)
+    # Filter out item squares where the unit cannot legally move (no drop location)
+    return {
+        coord for coord in candidates
+        if can_move_onto_item_square(state.board, unit, coord)
+    }
+
+
+def get_drop_squares(state: GameState) -> list[Coordinate]:
+    """Return valid squares where the pending item can be dropped."""
+    if state.phase != Phase.ITEM_DROP or state.pending_drop_coord is None:
+        return []
+    return get_valid_drop_squares(state.board, state.pending_drop_coord)
+
+
+def get_choosable_units(state: GameState) -> list[str]:
+    """Return unit IDs the current team can activate."""
+    if state.phase != Phase.ACTIVATION or state.active_unit_id is not None:
+        return []
+
+    team = get_current_team(state)
+    team_units = state.team1_units if team == 1 else state.team2_units
+    last = state.last_activated.get(team)
+
+    choosable: list[str] = []
+    for unit in team_units:
+        if unit.unit_id not in state.board.unit_positions:
+            continue
+        if last is not None and unit.unit_id == last:
+            continue
+        choosable.append(unit.unit_id)
+    return choosable
 
 
 # ---------------------------------------------------------------------------

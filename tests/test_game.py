@@ -16,7 +16,14 @@ from dice_rangers.game import (
     do_skip_action,
     do_use_item,
     end_activation,
+    get_attackable_targets,
+    get_choosable_units,
+    get_current_team,
+    get_drop_squares,
+    get_reachable_squares,
+    get_team_morale,
     get_unit,
+    get_valid_actions,
     new_game,
     place_obstacle,
     place_unit_on_board,
@@ -1168,3 +1175,458 @@ def test_partial_round_integration():
         assert state.last_activated[2] == p2_uid
         assert state.activation_index == 2
         assert state.phase == Phase.ACTIVATION  # 2 more activations remain
+
+
+# ===========================================================================
+# Part 3: Query / Helper Function Tests
+# ===========================================================================
+
+
+
+
+# ---------------------------------------------------------------------------
+# Helpers for Part 3
+# ---------------------------------------------------------------------------
+
+def _setup_activation_state(seed=42) -> GameState:
+    """Return a state in ACTIVATION phase with units on the board."""
+    state = _setup_through_round_start(seed=seed)
+    resolve_round_start(state)
+    return state
+
+
+def _place_units_adjacent(state: GameState) -> tuple[str, str]:
+    """Place p1 unit at D4 and p2 unit at D5 (adjacent). Return (p1_uid, p2_uid)."""
+    p1_uid = state.team1_units[0].unit_id
+    p2_uid = state.team2_units[0].unit_id
+    state.board.unit_positions[p1_uid] = Coordinate(col=3, row=3)
+    state.board.unit_positions[p2_uid] = Coordinate(col=3, row=4)
+    return p1_uid, p2_uid
+
+
+# ---------------------------------------------------------------------------
+# get_current_team
+# ---------------------------------------------------------------------------
+
+def test_get_current_team_returns_1_when_index_0():
+    state = _setup_activation_state()
+    state.activation_index = 0
+    assert get_current_team(state) == 1
+
+
+def test_get_current_team_returns_1_when_index_2():
+    state = _setup_activation_state()
+    state.activation_index = 2
+    assert get_current_team(state) == 1
+
+
+def test_get_current_team_returns_2_when_index_1():
+    state = _setup_activation_state()
+    state.activation_index = 1
+    assert get_current_team(state) == 2
+
+
+def test_get_current_team_returns_2_when_index_3():
+    state = _setup_activation_state()
+    state.activation_index = 3
+    assert get_current_team(state) == 2
+
+
+# ---------------------------------------------------------------------------
+# get_team_morale
+# ---------------------------------------------------------------------------
+
+def test_get_team_morale_team1():
+    state = _setup_activation_state()
+    state.team1_morale = 15
+    assert get_team_morale(state, 1) == 15
+
+
+def test_get_team_morale_team2():
+    state = _setup_activation_state()
+    state.team2_morale = 12
+    assert get_team_morale(state, 2) == 12
+
+
+def test_get_team_morale_invalid_raises():
+    state = _setup_activation_state()
+    with pytest.raises(ValueError):
+        get_team_morale(state, 3)
+
+
+# ---------------------------------------------------------------------------
+# get_valid_actions
+# ---------------------------------------------------------------------------
+
+def test_get_valid_actions_all_false_wrong_phase():
+    state = _setup_through_round_start()
+    # In ROUND_START phase — not ACTIVATION
+    actions = get_valid_actions(state)
+    assert actions == {
+        "move": False,
+        "attack": False,
+        "use_item": False,
+        "skip": False,
+        "end_turn": False,
+    }
+
+
+def test_get_valid_actions_all_false_no_active_unit():
+    state = _setup_activation_state()
+    assert state.active_unit_id is None
+    actions = get_valid_actions(state)
+    assert actions == {
+        "move": False,
+        "attack": False,
+        "use_item": False,
+        "skip": False,
+        "end_turn": False,
+    }
+
+
+def test_get_valid_actions_move_true_before_move():
+    state = _setup_activation_state()
+    p1_uid, _ = _place_units_adjacent(state)
+    begin_activation(state, p1_uid)
+    actions = get_valid_actions(state)
+    assert actions["move"] is True
+
+
+def test_get_valid_actions_move_false_after_move():
+    state = _setup_activation_state()
+    p1_uid = state.team1_units[0].unit_id
+    p2_uid = state.team2_units[0].unit_id
+    # Use a clear area of the board (bottom-right corner, away from seed=42 obstacles)
+    state.board.unit_positions[p1_uid] = Coordinate(col=6, row=6)
+    state.board.unit_positions[p2_uid] = Coordinate(col=6, row=7)
+    begin_activation(state, p1_uid)
+    state.movement_roll = 2
+    dest = Coordinate(col=6, row=5)
+    do_move(state, dest)
+    actions = get_valid_actions(state)
+    assert actions["move"] is False
+
+
+def test_get_valid_actions_attack_true_when_enemy_adjacent():
+    state = _setup_activation_state()
+    p1_uid, _ = _place_units_adjacent(state)
+    begin_activation(state, p1_uid)
+    actions = get_valid_actions(state)
+    assert actions["attack"] is True
+
+
+def test_get_valid_actions_attack_false_no_enemy_in_range():
+    state = _setup_activation_state()
+    p1_uid = state.team1_units[0].unit_id
+    p2_uid = state.team2_units[0].unit_id
+    # Place units far apart
+    state.board.unit_positions[p1_uid] = Coordinate(col=0, row=0)
+    state.board.unit_positions[p2_uid] = Coordinate(col=7, row=7)
+    begin_activation(state, p1_uid)
+    actions = get_valid_actions(state)
+    assert actions["attack"] is False
+
+
+def test_get_valid_actions_use_item_true_when_carrying():
+    state = _setup_activation_state()
+    p1_uid, _ = _place_units_adjacent(state)
+    unit = get_unit(state, p1_uid)
+    unit.carrying_item = "item_heal"
+    begin_activation(state, p1_uid)
+    actions = get_valid_actions(state)
+    assert actions["use_item"] is True
+
+
+def test_get_valid_actions_use_item_false_when_not_carrying():
+    state = _setup_activation_state()
+    p1_uid, _ = _place_units_adjacent(state)
+    unit = get_unit(state, p1_uid)
+    unit.carrying_item = None
+    begin_activation(state, p1_uid)
+    actions = get_valid_actions(state)
+    assert actions["use_item"] is False
+
+
+def test_get_valid_actions_skip_true_before_acted():
+    state = _setup_activation_state()
+    p1_uid, _ = _place_units_adjacent(state)
+    begin_activation(state, p1_uid)
+    actions = get_valid_actions(state)
+    assert actions["skip"] is True
+
+
+def test_get_valid_actions_skip_false_after_acted():
+    state = _setup_activation_state()
+    p1_uid, _ = _place_units_adjacent(state)
+    begin_activation(state, p1_uid)
+    do_skip_action(state)
+    actions = get_valid_actions(state)
+    assert actions["skip"] is False
+
+
+def test_get_valid_actions_end_turn_always_true():
+    state = _setup_activation_state()
+    p1_uid, _ = _place_units_adjacent(state)
+    begin_activation(state, p1_uid)
+    # Before and after acting
+    assert get_valid_actions(state)["end_turn"] is True
+    do_skip_action(state)
+    assert get_valid_actions(state)["end_turn"] is True
+
+
+# ---------------------------------------------------------------------------
+# get_attackable_targets
+# ---------------------------------------------------------------------------
+
+def test_get_attackable_targets_melee_range():
+    state = _setup_activation_state()
+    p1_uid, p2_uid = _place_units_adjacent(state)
+    begin_activation(state, p1_uid)
+    targets = get_attackable_targets(state)
+    assert p2_uid in targets
+
+
+def test_get_attackable_targets_ranged_range_with_los():
+    state = _setup_activation_state()
+    p1_uid = state.team1_units[0].unit_id
+    p2_uid = state.team2_units[0].unit_id
+    # Place 2 squares apart (ranged range), clear LOS
+    state.board.unit_positions[p1_uid] = Coordinate(col=3, row=3)
+    state.board.unit_positions[p2_uid] = Coordinate(col=3, row=5)
+    begin_activation(state, p1_uid)
+    targets = get_attackable_targets(state)
+    assert p2_uid in targets
+
+
+def test_get_attackable_targets_excludes_blocked_by_obstacle():
+    state = _setup_activation_state()
+    p1_uid = state.team1_units[0].unit_id
+    p2_uid = state.team2_units[0].unit_id
+    # Place 2 squares apart with obstacle in between (blocking LOS)
+    state.board.unit_positions[p1_uid] = Coordinate(col=3, row=3)
+    state.board.unit_positions[p2_uid] = Coordinate(col=3, row=5)
+    state.board.obstacles.add(Coordinate(col=3, row=4))
+    begin_activation(state, p1_uid)
+    targets = get_attackable_targets(state)
+    assert p2_uid not in targets
+
+
+def test_get_attackable_targets_excludes_out_of_range():
+    state = _setup_activation_state()
+    p1_uid = state.team1_units[0].unit_id
+    p2_uid = state.team2_units[0].unit_id
+    state.board.unit_positions[p1_uid] = Coordinate(col=0, row=0)
+    state.board.unit_positions[p2_uid] = Coordinate(col=7, row=7)
+    begin_activation(state, p1_uid)
+    targets = get_attackable_targets(state)
+    assert p2_uid not in targets
+
+
+def test_get_attackable_targets_empty_no_active_unit():
+    state = _setup_activation_state()
+    assert get_attackable_targets(state) == []
+
+
+def test_get_attackable_targets_excludes_friendly():
+    state = _setup_activation_state()
+    p1_uid = state.team1_units[0].unit_id
+    p1b_uid = state.team1_units[1].unit_id
+    # Place both team1 units adjacent
+    state.board.unit_positions[p1_uid] = Coordinate(col=3, row=3)
+    state.board.unit_positions[p1b_uid] = Coordinate(col=3, row=4)
+    begin_activation(state, p1_uid)
+    targets = get_attackable_targets(state)
+    assert p1b_uid not in targets
+
+
+# ---------------------------------------------------------------------------
+# get_reachable_squares
+# ---------------------------------------------------------------------------
+
+def test_get_reachable_squares_returns_correct_set():
+    state = _setup_activation_state()
+    p1_uid, _ = _place_units_adjacent(state)
+    # Force movement_roll manually after begin_activation
+    begin_activation(state, p1_uid)
+    state.movement_roll = 2
+    squares = get_reachable_squares(state)
+    assert len(squares) > 0
+    # All squares should be within 2 orthogonal steps of D4 (col=3, row=3)
+    start = Coordinate(col=3, row=3)
+    for sq in squares:
+        assert abs(sq.col - start.col) + abs(sq.row - start.row) <= 2
+
+
+def test_get_reachable_squares_excludes_obstacles():
+    state = _setup_activation_state()
+    p1_uid = state.team1_units[0].unit_id
+    state.board.unit_positions[p1_uid] = Coordinate(col=3, row=3)
+    # Remove p2 from board to avoid blocking
+    p2_uid = state.team2_units[0].unit_id
+    state.board.unit_positions.pop(p2_uid, None)
+    begin_activation(state, p1_uid)
+    state.movement_roll = 1
+    # Place obstacle directly above
+    obs = Coordinate(col=3, row=2)
+    state.board.obstacles.add(obs)
+    squares = get_reachable_squares(state)
+    assert obs not in squares
+
+
+def test_get_reachable_squares_empty_when_already_moved():
+    state = _setup_activation_state()
+    p1_uid = state.team1_units[0].unit_id
+    p2_uid = state.team2_units[0].unit_id
+    # Use a clear area of the board
+    state.board.unit_positions[p1_uid] = Coordinate(col=6, row=6)
+    state.board.unit_positions[p2_uid] = Coordinate(col=6, row=7)
+    begin_activation(state, p1_uid)
+    state.movement_roll = 2
+    dest = Coordinate(col=6, row=5)
+    do_move(state, dest)
+    squares = get_reachable_squares(state)
+    assert squares == set()
+
+
+def test_get_reachable_squares_empty_no_active_unit():
+    state = _setup_activation_state()
+    assert get_reachable_squares(state) == set()
+
+
+def test_get_reachable_squares_empty_when_movement_roll_none():
+    state = _setup_activation_state()
+    p1_uid, _ = _place_units_adjacent(state)
+    begin_activation(state, p1_uid)
+    state.movement_roll = None
+    assert get_reachable_squares(state) == set()
+
+
+# ---------------------------------------------------------------------------
+# get_drop_squares
+# ---------------------------------------------------------------------------
+
+def test_get_drop_squares_returns_empty_when_not_item_drop_phase():
+    state = _setup_activation_state()
+    assert get_drop_squares(state) == []
+
+
+def test_get_drop_squares_returns_valid_squares_item_drop_phase():
+    state = _setup_activation_state()
+    p1_uid = state.team1_units[0].unit_id
+    # Place unit and an item on the board
+    unit_coord = Coordinate(col=3, row=3)
+    item_coord = Coordinate(col=3, row=4)
+    state.board.unit_positions[p1_uid] = unit_coord
+    state.board.item_positions[item_coord] = "item_heal"
+    # Give unit an item so pickup triggers a swap
+    unit = get_unit(state, p1_uid)
+    unit.carrying_item = "item_atk"
+    # Manually set ITEM_DROP phase state
+    state.phase = Phase.ITEM_DROP
+    state.pending_drop_item = "item_atk"
+    state.pending_drop_coord = item_coord
+    state.active_unit_id = p1_uid
+    drops = get_drop_squares(state)
+    assert isinstance(drops, list)
+    assert len(drops) > 0
+
+
+# ---------------------------------------------------------------------------
+# get_choosable_units
+# ---------------------------------------------------------------------------
+
+def test_get_choosable_units_returns_both_when_no_last_activated():
+    state = _setup_activation_state()
+    state.last_activated = {1: None, 2: None}
+    choosable = get_choosable_units(state)
+    p1_ids = [u.unit_id for u in state.team1_units]
+    for uid in p1_ids:
+        assert uid in choosable
+
+
+def test_get_choosable_units_excludes_last_activated():
+    state = _setup_activation_state()
+    p1_uid = state.team1_units[0].unit_id
+    p1b_uid = state.team1_units[1].unit_id
+    state.last_activated[1] = p1_uid
+    choosable = get_choosable_units(state)
+    assert p1_uid not in choosable
+    assert p1b_uid in choosable
+
+
+def test_get_choosable_units_empty_when_activation_in_progress():
+    state = _setup_activation_state()
+    p1_uid, _ = _place_units_adjacent(state)
+    begin_activation(state, p1_uid)
+    assert get_choosable_units(state) == []
+
+
+def test_get_choosable_units_empty_when_not_activation_phase():
+    state = _setup_through_round_start()
+    assert get_choosable_units(state) == []
+
+
+# ---------------------------------------------------------------------------
+# Integration test
+# ---------------------------------------------------------------------------
+
+def test_query_helpers_integration_seeded():
+    """Seeded integration: verify query helpers update correctly."""
+    state = _setup_activation_state(seed=99)
+
+    # Place units adjacent for combat
+    p1_uid = state.team1_units[0].unit_id
+    p2_uid = state.team2_units[0].unit_id
+    state.board.unit_positions[p1_uid] = Coordinate(col=4, row=3)
+    state.board.unit_positions[p2_uid] = Coordinate(col=4, row=4)
+
+    # Before activation: no choosable units should be active_unit_id
+    assert state.active_unit_id is None
+    choosable = get_choosable_units(state)
+    assert p1_uid in choosable
+
+    # Verify team morale via helper
+    assert get_team_morale(state, 1) == state.team1_morale
+    assert get_team_morale(state, 2) == state.team2_morale
+
+    # Begin activation
+    begin_activation(state, p1_uid)
+    assert get_current_team(state) == 1
+
+    # Actions: move should be available, end_turn always True
+    actions = get_valid_actions(state)
+    assert actions["move"] is True
+    assert actions["end_turn"] is True
+
+    # Reachable squares should be non-empty
+    squares = get_reachable_squares(state)
+    assert len(squares) > 0
+
+    # Attack should be available (p2 is adjacent)
+    assert actions["attack"] is True
+    assert p2_uid in get_attackable_targets(state)
+
+    # Attack p2
+    initial_morale = get_team_morale(state, 2)
+    result = do_attack(state, p2_uid)
+
+    if state.phase != Phase.VICTORY:
+        new_morale = get_team_morale(state, 2)
+        assert new_morale == max(0, initial_morale - result.net_damage)
+
+        # After acting, skip/attack/use_item should be False
+        actions_after = get_valid_actions(state)
+        assert actions_after["skip"] is False
+        assert actions_after["attack"] is False
+        assert actions_after["end_turn"] is True
+
+        end_activation(state)
+        # After ending, no active unit → all False
+        actions_ended = get_valid_actions(state)
+        assert actions_ended == {
+            "move": False,
+            "attack": False,
+            "use_item": False,
+            "skip": False,
+            "end_turn": False,
+        }
