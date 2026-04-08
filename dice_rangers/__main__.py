@@ -1,8 +1,9 @@
-import dice_rangers.game
+from dice_rangers.app import run
 
 
 def main():
-    dice_rangers.game.main()
+    run()
+
 
 if __name__ == "__main__":
     main()

@@ -757,12 +757,3 @@ def get_choosable_units(state: GameState) -> list[str]:
             continue
         choosable.append(unit.unit_id)
     return choosable
-
-
-# ---------------------------------------------------------------------------
-# Entry point (placeholder — replaced in a future hotfix)
-# ---------------------------------------------------------------------------
-
-
-def main() -> None:
-    print("Dice Rangers v0.1.0 — Ready to battle!")
