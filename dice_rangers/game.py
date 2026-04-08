@@ -2,20 +2,37 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 
 from dice_rangers.board import Board, Coordinate
 from dice_rangers.constants import (
+    MOVEMENT_DIE,
     OBSTACLES_PER_PLAYER,
     P1_SPAWN_ROWS,
     P2_SPAWN_ROWS,
     STARTING_MORALE,
 )
 from dice_rangers.dice import DiceRoller
-from dice_rangers.events import BoardEvent
-from dice_rangers.units import Customization, Unit, create_unit
-
+from dice_rangers.events import BoardEvent, resolve_board_event
+from dice_rangers.items import (
+    PickupResult,
+    UseItemResult,
+    can_move_onto_item_square,
+    drop_item,
+    get_valid_drop_squares,
+    pickup_item,
+    use_item,
+)
+from dice_rangers.units import (
+    AttackResult,
+    Customization,
+    Unit,
+    create_unit,
+    move_unit,
+    reset_activation,
+    resolve_attack,
+)
 
 # ---------------------------------------------------------------------------
 # Phase Enum
@@ -337,6 +354,283 @@ def place_unit_on_board(
             state.units_spawned_this_player = 0
         else:
             state.phase = Phase.ROUND_START
+
+
+# ---------------------------------------------------------------------------
+# Round Start Phase
+# ---------------------------------------------------------------------------
+
+
+def resolve_round_start(state: GameState) -> BoardEvent:
+    """Roll for a board event, reset activation index, advance to ACTIVATION.
+
+    Raises:
+        ValueError: If not in ROUND_START phase.
+    """
+    if state.phase != Phase.ROUND_START:
+        raise ValueError(f"resolve_round_start called in wrong phase: {state.phase}")
+
+    event = resolve_board_event(state.board, state.roller)
+    state.current_event = event
+    state.activation_index = 0
+    state.phase = Phase.ACTIVATION
+    return event
+
+
+# ---------------------------------------------------------------------------
+# Activation Phase
+# ---------------------------------------------------------------------------
+
+
+def begin_activation(state: GameState, unit_id: str) -> int:
+    """Begin a unit's activation: validate, reset, roll movement.
+
+    Args:
+        state: Current game state.
+        unit_id: The unit to activate.
+
+    Returns:
+        The movement roll (1–MOVEMENT_DIE).
+
+    Raises:
+        ValueError: If phase is wrong, unit is invalid, or alternation rule violated.
+    """
+    if state.phase != Phase.ACTIVATION:
+        raise ValueError(f"begin_activation called in wrong phase: {state.phase}")
+    if state.active_unit_id is not None:
+        raise ValueError(
+            f"Previous activation not ended (active_unit_id={state.active_unit_id!r})"
+        )
+
+    # Determine which team's turn it is
+    team = 1 if state.activation_index % 2 == 0 else 2
+
+    # Validate unit belongs to that team
+    team_units = state.team1_units if team == 1 else state.team2_units
+    team_unit_ids = {u.unit_id for u in team_units}
+    if unit_id not in team_unit_ids:
+        raise ValueError(
+            f"Unit {unit_id!r} does not belong to team {team} "
+            f"(activation_index={state.activation_index})"
+        )
+
+    # Validate unit has a board position
+    if unit_id not in state.board.unit_positions:
+        raise ValueError(f"Unit {unit_id!r} has no position on the board")
+
+    # Alternation rule: can't activate same unit twice in a row
+    if state.last_activated[team] is not None and state.last_activated[team] == unit_id:
+        raise ValueError(
+            f"Unit {unit_id!r} was last activated for team {team}; "
+            "must activate the other unit"
+        )
+
+    unit = get_unit(state, unit_id)
+    reset_activation(unit)
+
+    roll = state.roller.roll(MOVEMENT_DIE)
+    state.movement_roll = roll
+    state.active_unit_id = unit_id
+    return roll
+
+
+def do_move(state: GameState, destination: Coordinate) -> PickupResult | None:
+    """Move the active unit to destination, handling item pickup.
+
+    Args:
+        state: Current game state.
+        destination: Target coordinate.
+
+    Returns:
+        PickupResult if an item was picked up, else None.
+
+    Raises:
+        ValueError: If phase wrong, no active unit, already moved, or destination
+            invalid.
+    """
+    if state.phase != Phase.ACTIVATION:
+        raise ValueError(f"do_move called in wrong phase: {state.phase}")
+    if state.active_unit_id is None:
+        raise ValueError("No active unit")
+
+    unit = get_unit(state, state.active_unit_id)
+    if unit.has_moved:
+        raise ValueError(f"Unit {unit.unit_id!r} has already moved this activation")
+
+    # Item-square check before moving
+    if destination in state.board.item_positions:
+        if not can_move_onto_item_square(state.board, unit, destination):
+            raise ValueError(
+                "Cannot move there: no valid drop square for current item"
+            )
+
+    # Move the unit (validates reachability, sets has_moved=True)
+    move_unit(state.board, unit, destination, state.movement_roll)
+
+    # Auto-pickup check
+    if destination in state.board.item_positions:
+        pickup_result = pickup_item(state.board, unit)
+        if pickup_result.needs_drop_location:
+            state.pending_drop_item = pickup_result.dropped
+            state.pending_drop_coord = destination
+            state.phase = Phase.ITEM_DROP
+        return pickup_result
+
+    return None
+
+
+def do_attack(state: GameState, target_unit_id: str) -> AttackResult:
+    """Attack a target unit.
+
+    Args:
+        state: Current game state.
+        target_unit_id: The unit to attack.
+
+    Returns:
+        AttackResult with damage details.
+
+    Raises:
+        ValueError: If phase wrong, no active unit, already acted, or invalid target.
+    """
+    if state.phase != Phase.ACTIVATION:
+        raise ValueError(f"do_attack called in wrong phase: {state.phase}")
+    if state.active_unit_id is None:
+        raise ValueError("No active unit")
+
+    attacker = get_unit(state, state.active_unit_id)
+    if attacker.has_acted:
+        raise ValueError(f"Unit {attacker.unit_id!r} has already acted this activation")
+
+    defender = get_unit(state, target_unit_id)
+    if defender.team == attacker.team:
+        raise ValueError(
+            f"Cannot attack friendly unit {target_unit_id!r} "
+            f"(same team {attacker.team})"
+        )
+
+    result = resolve_attack(attacker, defender, state.board, state.roller)
+
+    # Apply damage to defender's team morale
+    if defender.team == 1:
+        state.team1_morale = max(0, state.team1_morale - result.net_damage)
+    else:
+        state.team2_morale = max(0, state.team2_morale - result.net_damage)
+
+    # Win condition check (attacker's team wins if they reduce enemy to 0)
+    if state.team1_morale <= 0:
+        state.winner = 2
+        state.phase = Phase.VICTORY
+    elif state.team2_morale <= 0:
+        state.winner = 1
+        state.phase = Phase.VICTORY
+
+    return result
+
+
+def do_use_item(state: GameState) -> UseItemResult:
+    """Use the active unit's carried item.
+
+    Returns:
+        UseItemResult with effect details.
+
+    Raises:
+        ValueError: If phase wrong, no active unit, already acted, or no item.
+    """
+    if state.phase != Phase.ACTIVATION:
+        raise ValueError(f"do_use_item called in wrong phase: {state.phase}")
+    if state.active_unit_id is None:
+        raise ValueError("No active unit")
+
+    unit = get_unit(state, state.active_unit_id)
+    if unit.has_acted:
+        raise ValueError(f"Unit {unit.unit_id!r} has already acted this activation")
+    if unit.carrying_item is None:
+        raise ValueError(f"Unit {unit.unit_id!r} is not carrying an item")
+
+    morale = state.team1_morale if unit.team == 1 else state.team2_morale
+    result = use_item(unit, morale)
+
+    if unit.team == 1:
+        state.team1_morale = result.new_morale
+    else:
+        state.team2_morale = result.new_morale
+
+    return result
+
+
+def do_skip_action(state: GameState) -> None:
+    """Skip the active unit's action (sets has_acted=True).
+
+    Raises:
+        ValueError: If phase wrong, no active unit, or already acted.
+    """
+    if state.phase != Phase.ACTIVATION:
+        raise ValueError(f"do_skip_action called in wrong phase: {state.phase}")
+    if state.active_unit_id is None:
+        raise ValueError("No active unit")
+
+    unit = get_unit(state, state.active_unit_id)
+    if unit.has_acted:
+        raise ValueError(f"Unit {unit.unit_id!r} has already acted this activation")
+
+    unit.has_acted = True
+
+
+def end_activation(state: GameState) -> None:
+    """End the current unit's activation and advance turn order.
+
+    Raises:
+        ValueError: If phase wrong or no active unit.
+    """
+    if state.phase != Phase.ACTIVATION:
+        raise ValueError(f"end_activation called in wrong phase: {state.phase}")
+    if state.active_unit_id is None:
+        raise ValueError("No active unit to end")
+
+    unit = get_unit(state, state.active_unit_id)
+    state.last_activated[unit.team] = state.active_unit_id
+    state.activation_index += 1
+    state.active_unit_id = None
+    state.movement_roll = None
+
+    if state.activation_index >= 4:
+        state.round_number += 1
+        state.phase = Phase.ROUND_START
+    # else: stays in ACTIVATION
+
+
+# ---------------------------------------------------------------------------
+# Item Drop Phase
+# ---------------------------------------------------------------------------
+
+
+def do_drop_item(state: GameState, drop_coord: Coordinate) -> None:
+    """Drop the pending item at a valid adjacent square.
+
+    Args:
+        state: Current game state.
+        drop_coord: Where to drop the item.
+
+    Raises:
+        ValueError: If phase wrong, no pending item, or invalid drop square.
+    """
+    if state.phase != Phase.ITEM_DROP:
+        raise ValueError(f"do_drop_item called in wrong phase: {state.phase}")
+    if state.pending_drop_item is None:
+        raise ValueError("No pending item to drop")
+    if state.pending_drop_coord is None:
+        raise ValueError("No pending drop coordinate")
+
+    valid_squares = get_valid_drop_squares(state.board, state.pending_drop_coord)
+    if drop_coord not in valid_squares:
+        raise ValueError(
+            f"Drop coordinate {drop_coord.to_label()} is not a valid drop square"
+        )
+
+    drop_item(state.board, state.pending_drop_item, drop_coord)
+    state.pending_drop_item = None
+    state.pending_drop_coord = None
+    state.phase = Phase.ACTIVATION
 
 
 # ---------------------------------------------------------------------------

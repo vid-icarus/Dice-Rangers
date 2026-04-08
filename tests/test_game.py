@@ -1,23 +1,30 @@
-"""Tests for game.py — setup phases (Part 1)."""
+"""Tests for game.py — setup phases (Part 1) and game loop (Part 2)."""
 
 from __future__ import annotations
 
 import pytest
 
-from dice_rangers.board import Board, Coordinate
+from dice_rangers.board import Coordinate
 from dice_rangers.constants import STARTING_MORALE
 from dice_rangers.game import (
-    Phase,
     GameState,
-    new_game,
+    Phase,
+    begin_activation,
+    do_attack,
+    do_drop_item,
+    do_move,
+    do_skip_action,
+    do_use_item,
+    end_activation,
     get_unit,
-    submit_customization,
-    roll_obstacle,
+    new_game,
     place_obstacle,
     place_unit_on_board,
+    resolve_round_start,
+    roll_obstacle,
+    submit_customization,
 )
 from dice_rangers.units import Customization
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -449,6 +456,27 @@ def _place_8_obstacles(state: GameState) -> int:
     return placed_count
 
 
+def _setup_through_round_start(seed=42) -> GameState:
+    """Return a state fully set up and in ROUND_START phase."""
+    state = _setup_through_obstacles(seed=seed)
+    # Place P1 units in rows 1-2 (0-indexed: rows 0-1)
+    place_unit_on_board(state, state.team1_units[0].unit_id, Coordinate(col=2, row=0))
+    place_unit_on_board(state, state.team1_units[1].unit_id, Coordinate(col=3, row=0))
+    # Place P2 units in rows 6-7 (0-indexed)
+    place_unit_on_board(state, state.team2_units[0].unit_id, Coordinate(col=2, row=7))
+    place_unit_on_board(state, state.team2_units[1].unit_id, Coordinate(col=3, row=7))
+    assert state.phase == Phase.ROUND_START
+    return state
+
+
+def _setup_through_activation(seed=42) -> GameState:
+    """Return a state in ACTIVATION phase (round start resolved)."""
+    state = _setup_through_round_start(seed=seed)
+    resolve_round_start(state)
+    assert state.phase == Phase.ACTIVATION
+    return state
+
+
 def test_full_setup_flow():
     """Full setup flow: new_game → 4 customizations → 8 obstacles → 4 spawns → ROUND_START."""
     state = new_game(seed=42)
@@ -495,3 +523,648 @@ def test_full_setup_flow():
 
     assert state.phase == Phase.ROUND_START
     assert len(state.board.unit_positions) == 4
+
+
+# ---------------------------------------------------------------------------
+# Part 2: resolve_round_start Tests
+# ---------------------------------------------------------------------------
+
+def test_resolve_round_start_returns_board_event():
+    from dice_rangers.events import BoardEvent
+    state = _setup_through_round_start()
+    event = resolve_round_start(state)
+    assert isinstance(event, BoardEvent)
+
+
+def test_resolve_round_start_stores_current_event():
+    state = _setup_through_round_start()
+    event = resolve_round_start(state)
+    assert state.current_event is event
+
+
+def test_resolve_round_start_resets_activation_index():
+    state = _setup_through_round_start()
+    state.activation_index = 3  # simulate mid-round
+    resolve_round_start(state)
+    assert state.activation_index == 0
+
+
+def test_resolve_round_start_advances_to_activation():
+    state = _setup_through_round_start()
+    resolve_round_start(state)
+    assert state.phase == Phase.ACTIVATION
+
+
+def test_resolve_round_start_raises_wrong_phase():
+    state = _setup_through_activation()
+    with pytest.raises(ValueError):
+        resolve_round_start(state)
+
+
+# ---------------------------------------------------------------------------
+# Part 2: begin_activation Tests
+# ---------------------------------------------------------------------------
+
+def test_begin_activation_returns_movement_roll():
+    state = _setup_through_activation()
+    roll = begin_activation(state, state.team1_units[0].unit_id)
+    assert 1 <= roll <= 6
+
+
+def test_begin_activation_stores_movement_roll():
+    state = _setup_through_activation()
+    uid = state.team1_units[0].unit_id
+    roll = begin_activation(state, uid)
+    assert state.movement_roll == roll
+
+
+def test_begin_activation_sets_active_unit_id():
+    state = _setup_through_activation()
+    uid = state.team1_units[0].unit_id
+    begin_activation(state, uid)
+    assert state.active_unit_id == uid
+
+
+def test_begin_activation_resets_has_moved_and_has_acted():
+    state = _setup_through_activation()
+    unit = state.team1_units[0]
+    unit.has_moved = True
+    unit.has_acted = True
+    begin_activation(state, unit.unit_id)
+    assert unit.has_moved is False
+    assert unit.has_acted is False
+
+
+def test_begin_activation_raises_wrong_team():
+    state = _setup_through_activation()
+    # activation_index=0 → team 1's turn; P2 unit should fail
+    p2_uid = state.team2_units[0].unit_id
+    with pytest.raises(ValueError):
+        begin_activation(state, p2_uid)
+
+
+def test_begin_activation_raises_same_unit_as_last_activated():
+    state = _setup_through_activation()
+    uid = state.team1_units[0].unit_id
+    # Simulate that this unit was last activated for team 1
+    state.last_activated[1] = uid
+    with pytest.raises(ValueError):
+        begin_activation(state, uid)
+
+
+def test_begin_activation_allows_either_unit_on_first_activation():
+    state = _setup_through_activation()
+    # last_activated[1] is None → either P1 unit is valid
+    uid = state.team1_units[1].unit_id
+    roll = begin_activation(state, uid)
+    assert 1 <= roll <= 6
+    assert state.active_unit_id == uid
+
+
+def test_begin_activation_raises_if_previous_not_ended():
+    state = _setup_through_activation()
+    uid = state.team1_units[0].unit_id
+    begin_activation(state, uid)
+    with pytest.raises(ValueError):
+        begin_activation(state, uid)
+
+
+def test_begin_activation_raises_unit_not_on_board():
+    state = _setup_through_activation()
+    uid = state.team1_units[0].unit_id
+    # Remove unit from board
+    del state.board.unit_positions[uid]
+    with pytest.raises(ValueError):
+        begin_activation(state, uid)
+
+
+# ---------------------------------------------------------------------------
+# Part 2: do_move Tests
+# ---------------------------------------------------------------------------
+
+def test_do_move_moves_unit():
+    state = _setup_through_activation()
+    uid = state.team1_units[0].unit_id
+    begin_activation(state, uid)
+    src = state.board.unit_positions[uid]
+    # Move one step down (row+1)
+    dest = Coordinate(col=src.col, row=src.row + 1)
+    do_move(state, dest)
+    assert state.board.unit_positions[uid] == dest
+
+
+def test_do_move_sets_has_moved():
+    state = _setup_through_activation()
+    uid = state.team1_units[0].unit_id
+    begin_activation(state, uid)
+    src = state.board.unit_positions[uid]
+    dest = Coordinate(col=src.col, row=src.row + 1)
+    do_move(state, dest)
+    assert get_unit(state, uid).has_moved is True
+
+
+def test_do_move_raises_if_already_moved():
+    state = _setup_through_activation()
+    uid = state.team1_units[0].unit_id
+    begin_activation(state, uid)
+    src = state.board.unit_positions[uid]
+    dest = Coordinate(col=src.col, row=src.row + 1)
+    do_move(state, dest)
+    with pytest.raises(ValueError):
+        do_move(state, Coordinate(col=src.col, row=src.row + 2))
+
+
+def test_do_move_raises_unreachable_destination():
+    state = _setup_through_activation()
+    uid = state.team1_units[0].unit_id
+    # Force movement_roll to 1 so far squares are unreachable
+    begin_activation(state, uid)
+    state.movement_roll = 1
+    src = state.board.unit_positions[uid]
+    # Try to move 5 squares away
+    far_dest = Coordinate(col=src.col, row=min(7, src.row + 5))
+    with pytest.raises(ValueError):
+        do_move(state, far_dest)
+
+
+def test_do_move_returns_none_when_no_item():
+    state = _setup_through_activation()
+    uid = state.team1_units[0].unit_id
+    begin_activation(state, uid)
+    src = state.board.unit_positions[uid]
+    dest = Coordinate(col=src.col, row=src.row + 1)
+    result = do_move(state, dest)
+    assert result is None
+
+
+def test_do_move_auto_pickup_item():
+    from dice_rangers.items import PickupResult
+    state = _setup_through_activation()
+    uid = state.team1_units[0].unit_id
+    src = state.board.unit_positions[uid]
+    # Place an item adjacent to the unit
+    item_dest = Coordinate(col=src.col, row=src.row + 1)
+    state.board.item_positions[item_dest] = "item_heal"
+    begin_activation(state, uid)
+    state.movement_roll = 6  # ensure reachable
+    result = do_move(state, item_dest)
+    assert isinstance(result, PickupResult)
+    assert result.picked_up == "item_heal"
+
+
+def test_do_move_raises_wrong_phase():
+    state = _setup_through_round_start()
+    with pytest.raises(ValueError):
+        do_move(state, Coordinate(col=0, row=0))
+
+
+def test_do_move_raises_no_active_unit():
+    state = _setup_through_activation()
+    with pytest.raises(ValueError):
+        do_move(state, Coordinate(col=0, row=0))
+
+
+# ---------------------------------------------------------------------------
+# Part 2: do_attack Tests
+# ---------------------------------------------------------------------------
+
+def _setup_adjacent_combat(seed=42):
+    """Set up state with P1 unit adjacent to P2 unit, P1 activated."""
+    state = _setup_through_activation(seed=seed)
+    p1_uid = state.team1_units[0].unit_id
+    p2_uid = state.team2_units[0].unit_id
+    # Place units adjacent to each other
+    state.board.unit_positions[p1_uid] = Coordinate(col=4, row=3)
+    state.board.unit_positions[p2_uid] = Coordinate(col=4, row=4)
+    begin_activation(state, p1_uid)
+    return state, p1_uid, p2_uid
+
+
+def test_do_attack_returns_attack_result():
+    from dice_rangers.units import AttackResult
+    state, p1_uid, p2_uid = _setup_adjacent_combat()
+    result = do_attack(state, p2_uid)
+    assert isinstance(result, AttackResult)
+
+
+def test_do_attack_applies_damage_to_defender_morale():
+    state, p1_uid, p2_uid = _setup_adjacent_combat(seed=1)
+    initial_morale = state.team2_morale
+    result = do_attack(state, p2_uid)
+    assert state.team2_morale == max(0, initial_morale - result.net_damage)
+
+
+def test_do_attack_raises_if_already_acted():
+    state, p1_uid, p2_uid = _setup_adjacent_combat()
+    do_attack(state, p2_uid)
+    with pytest.raises(ValueError):
+        do_attack(state, p2_uid)
+
+
+def test_do_attack_raises_same_team():
+    state = _setup_through_activation()
+    p1_uid = state.team1_units[0].unit_id
+    p1_uid2 = state.team1_units[1].unit_id
+    state.board.unit_positions[p1_uid] = Coordinate(col=4, row=3)
+    state.board.unit_positions[p1_uid2] = Coordinate(col=4, row=4)
+    begin_activation(state, p1_uid)
+    with pytest.raises(ValueError):
+        do_attack(state, p1_uid2)
+
+
+def test_do_attack_victory_when_morale_reaches_zero():
+    state, p1_uid, p2_uid = _setup_adjacent_combat()
+    state.team2_morale = 1  # one hit should finish them
+    do_attack(state, p2_uid)
+    if state.team2_morale <= 0:
+        assert state.phase == Phase.VICTORY
+        assert state.winner == 1
+
+
+def test_do_attack_raises_wrong_phase():
+    state = _setup_through_round_start()
+    with pytest.raises(ValueError):
+        do_attack(state, "p2a")
+
+
+def test_do_attack_raises_no_active_unit():
+    state = _setup_through_activation()
+    with pytest.raises(ValueError):
+        do_attack(state, "p2a")
+
+
+# ---------------------------------------------------------------------------
+# Part 2: do_use_item Tests
+# ---------------------------------------------------------------------------
+
+def _setup_unit_with_item(item_id="item_heal", seed=42):
+    """Set up state with P1 unit carrying an item, activated."""
+    state = _setup_through_activation(seed=seed)
+    uid = state.team1_units[0].unit_id
+    unit = get_unit(state, uid)
+    unit.carrying_item = item_id
+    begin_activation(state, uid)
+    return state, uid
+
+
+def test_do_use_item_heal_increases_morale():
+    state, uid = _setup_unit_with_item("item_heal")
+    state.team1_morale = 10
+    result = do_use_item(state)
+    assert state.team1_morale > 10
+
+
+def test_do_use_item_atk_boost_sets_flag():
+    state, uid = _setup_unit_with_item("item_atk")
+    do_use_item(state)
+    unit = get_unit(state, uid)
+    assert unit.atk_boost_active is True
+
+
+def test_do_use_item_def_boost_sets_flag():
+    state, uid = _setup_unit_with_item("item_def")
+    do_use_item(state)
+    unit = get_unit(state, uid)
+    assert unit.def_boost_active is True
+
+
+def test_do_use_item_raises_if_already_acted():
+    state, uid = _setup_unit_with_item()
+    do_use_item(state)
+    with pytest.raises(ValueError):
+        do_use_item(state)
+
+
+def test_do_use_item_raises_if_no_item():
+    state = _setup_through_activation()
+    uid = state.team1_units[0].unit_id
+    begin_activation(state, uid)
+    with pytest.raises(ValueError):
+        do_use_item(state)
+
+
+def test_do_use_item_raises_wrong_phase():
+    state = _setup_through_round_start()
+    with pytest.raises(ValueError):
+        do_use_item(state)
+
+
+# ---------------------------------------------------------------------------
+# Part 2: do_skip_action Tests
+# ---------------------------------------------------------------------------
+
+def test_do_skip_action_sets_has_acted():
+    state = _setup_through_activation()
+    uid = state.team1_units[0].unit_id
+    begin_activation(state, uid)
+    do_skip_action(state)
+    assert get_unit(state, uid).has_acted is True
+
+
+def test_do_skip_action_raises_if_already_acted():
+    state = _setup_through_activation()
+    uid = state.team1_units[0].unit_id
+    begin_activation(state, uid)
+    do_skip_action(state)
+    with pytest.raises(ValueError):
+        do_skip_action(state)
+
+
+def test_do_skip_action_raises_wrong_phase():
+    state = _setup_through_round_start()
+    with pytest.raises(ValueError):
+        do_skip_action(state)
+
+
+def test_do_skip_action_raises_no_active_unit():
+    state = _setup_through_activation()
+    with pytest.raises(ValueError):
+        do_skip_action(state)
+
+
+# ---------------------------------------------------------------------------
+# Part 2: end_activation Tests
+# ---------------------------------------------------------------------------
+
+def test_end_activation_updates_last_activated():
+    state = _setup_through_activation()
+    uid = state.team1_units[0].unit_id
+    begin_activation(state, uid)
+    end_activation(state)
+    assert state.last_activated[1] == uid
+
+
+def test_end_activation_increments_activation_index():
+    state = _setup_through_activation()
+    uid = state.team1_units[0].unit_id
+    begin_activation(state, uid)
+    end_activation(state)
+    assert state.activation_index == 1
+
+
+def test_end_activation_clears_active_unit_and_roll():
+    state = _setup_through_activation()
+    uid = state.team1_units[0].unit_id
+    begin_activation(state, uid)
+    end_activation(state)
+    assert state.active_unit_id is None
+    assert state.movement_roll is None
+
+
+def test_end_activation_stays_in_activation_if_activations_remain():
+    state = _setup_through_activation()
+    uid = state.team1_units[0].unit_id
+    begin_activation(state, uid)
+    end_activation(state)
+    assert state.phase == Phase.ACTIVATION
+
+
+def test_end_activation_advances_to_round_start_after_4():
+    state = _setup_through_activation()
+    p1a = state.team1_units[0].unit_id
+    p1b = state.team1_units[1].unit_id
+    p2a = state.team2_units[0].unit_id
+    p2b = state.team2_units[1].unit_id
+
+    # activation_index 0: P1 turn
+    begin_activation(state, p1a)
+    end_activation(state)
+    # activation_index 1: P2 turn
+    begin_activation(state, p2a)
+    end_activation(state)
+    # activation_index 2: P1 turn
+    begin_activation(state, p1b)
+    end_activation(state)
+    # activation_index 3: P2 turn
+    begin_activation(state, p2b)
+    end_activation(state)
+
+    assert state.phase == Phase.ROUND_START
+
+
+def test_end_activation_increments_round_number_after_4():
+    state = _setup_through_activation()
+    p1a = state.team1_units[0].unit_id
+    p1b = state.team1_units[1].unit_id
+    p2a = state.team2_units[0].unit_id
+    p2b = state.team2_units[1].unit_id
+
+    initial_round = state.round_number
+    begin_activation(state, p1a); end_activation(state)
+    begin_activation(state, p2a); end_activation(state)
+    begin_activation(state, p1b); end_activation(state)
+    begin_activation(state, p2b); end_activation(state)
+
+    assert state.round_number == initial_round + 1
+
+
+def test_end_activation_works_without_move_or_act():
+    state = _setup_through_activation()
+    uid = state.team1_units[0].unit_id
+    begin_activation(state, uid)
+    # Don't move or act — just end
+    end_activation(state)
+    assert state.active_unit_id is None
+
+
+def test_end_activation_raises_wrong_phase():
+    state = _setup_through_round_start()
+    with pytest.raises(ValueError):
+        end_activation(state)
+
+
+def test_end_activation_raises_no_active_unit():
+    state = _setup_through_activation()
+    with pytest.raises(ValueError):
+        end_activation(state)
+
+
+# ---------------------------------------------------------------------------
+# Part 2: do_drop_item Tests
+# ---------------------------------------------------------------------------
+
+def _setup_item_drop_state(seed=42):
+    """Set up state in ITEM_DROP phase with a pending drop."""
+    state = _setup_through_activation(seed=seed)
+    uid = state.team1_units[0].unit_id
+    unit = get_unit(state, uid)
+    # Give unit a carried item
+    unit.carrying_item = "item_heal"
+    # Place unit one step away from a clear item square (avoid obstacles)
+    src_coord = Coordinate(col=4, row=2)
+    item_coord = Coordinate(col=5, row=2)  # clear square adjacent to src
+    state.board.unit_positions[uid] = src_coord
+    state.board.item_positions[item_coord] = "item_atk"
+    begin_activation(state, uid)
+    state.movement_roll = 6
+    # Move onto item square — triggers swap pickup → ITEM_DROP
+    do_move(state, item_coord)
+    return state, uid
+
+
+def test_do_drop_item_places_item_on_valid_square():
+    state, uid = _setup_item_drop_state()
+    if state.phase != Phase.ITEM_DROP:
+        pytest.skip("Item drop not triggered (no valid drop squares or no swap needed)")
+    from dice_rangers.items import get_valid_drop_squares
+    valid = get_valid_drop_squares(state.board, state.pending_drop_coord)
+    if not valid:
+        pytest.skip("No valid drop squares available")
+    drop_coord = next(iter(valid))
+    do_drop_item(state, drop_coord)
+    assert drop_coord in state.board.item_positions
+
+
+def test_do_drop_item_clears_pending_state():
+    state, uid = _setup_item_drop_state()
+    if state.phase != Phase.ITEM_DROP:
+        pytest.skip("Item drop not triggered")
+    from dice_rangers.items import get_valid_drop_squares
+    valid = get_valid_drop_squares(state.board, state.pending_drop_coord)
+    if not valid:
+        pytest.skip("No valid drop squares available")
+    drop_coord = next(iter(valid))
+    do_drop_item(state, drop_coord)
+    assert state.pending_drop_item is None
+    assert state.pending_drop_coord is None
+
+
+def test_do_drop_item_returns_to_activation():
+    state, uid = _setup_item_drop_state()
+    if state.phase != Phase.ITEM_DROP:
+        pytest.skip("Item drop not triggered")
+    from dice_rangers.items import get_valid_drop_squares
+    valid = get_valid_drop_squares(state.board, state.pending_drop_coord)
+    if not valid:
+        pytest.skip("No valid drop squares available")
+    drop_coord = next(iter(valid))
+    do_drop_item(state, drop_coord)
+    assert state.phase == Phase.ACTIVATION
+
+
+def test_do_drop_item_raises_invalid_square():
+    state = _setup_through_activation()
+    # Manually set up ITEM_DROP phase
+    state.phase = Phase.ITEM_DROP
+    state.pending_drop_item = "item_heal"
+    state.pending_drop_coord = Coordinate(col=4, row=4)
+    # Use a far-away coord that's not adjacent
+    with pytest.raises(ValueError):
+        do_drop_item(state, Coordinate(col=0, row=0))
+
+
+def test_do_drop_item_raises_wrong_phase():
+    state = _setup_through_activation()
+    with pytest.raises(ValueError):
+        do_drop_item(state, Coordinate(col=0, row=0))
+
+
+# ---------------------------------------------------------------------------
+# Part 2: Action Order Flexibility Tests
+# ---------------------------------------------------------------------------
+
+def test_attack_then_move():
+    state, p1_uid, p2_uid = _setup_adjacent_combat()
+    # Act first
+    do_attack(state, p2_uid)
+    # Then move (if not in VICTORY)
+    if state.phase == Phase.ACTIVATION:
+        src = state.board.unit_positions[p1_uid]
+        dest = Coordinate(col=src.col, row=max(0, src.row - 1))
+        if dest != src:
+            do_move(state, dest)
+            assert get_unit(state, p1_uid).has_moved is True
+
+
+def test_move_then_attack():
+    state, p1_uid, p2_uid = _setup_adjacent_combat()
+    # Move first (to same row, different col if possible)
+    src = state.board.unit_positions[p1_uid]
+    dest = Coordinate(col=max(0, src.col - 1), row=src.row)
+    if dest != src and state.board.is_passable(dest):
+        do_move(state, dest)
+    # Then attack
+    do_attack(state, p2_uid)
+    assert get_unit(state, p1_uid).has_acted is True
+
+
+def test_move_only_then_end():
+    state = _setup_through_activation()
+    uid = state.team1_units[0].unit_id
+    begin_activation(state, uid)
+    src = state.board.unit_positions[uid]
+    dest = Coordinate(col=src.col, row=src.row + 1)
+    do_move(state, dest)
+    end_activation(state)
+    assert state.active_unit_id is None
+
+
+def test_attack_only_then_end():
+    state, p1_uid, p2_uid = _setup_adjacent_combat()
+    do_attack(state, p2_uid)
+    if state.phase == Phase.ACTIVATION:
+        end_activation(state)
+        assert state.active_unit_id is None
+
+
+def test_skip_everything_and_end():
+    state = _setup_through_activation()
+    uid = state.team1_units[0].unit_id
+    begin_activation(state, uid)
+    do_skip_action(state)
+    end_activation(state)
+    assert state.active_unit_id is None
+
+
+# ---------------------------------------------------------------------------
+# Part 2: Integration Test
+# ---------------------------------------------------------------------------
+
+def test_partial_round_integration():
+    """Seeded test: ROUND_START → event → P1 activate → move → attack P2 → end → P2 activate → move → end."""
+    state = _setup_through_round_start(seed=7)
+
+    # Round start
+    event = resolve_round_start(state)
+    assert state.phase == Phase.ACTIVATION
+    assert state.activation_index == 0
+
+    p1_uid = state.team1_units[0].unit_id
+    p2_uid = state.team2_units[0].unit_id
+
+    # Place units adjacent for combat
+    state.board.unit_positions[p1_uid] = Coordinate(col=4, row=3)
+    state.board.unit_positions[p2_uid] = Coordinate(col=4, row=4)
+
+    # P1 activates
+    roll = begin_activation(state, p1_uid)
+    assert 1 <= roll <= 6
+    assert state.active_unit_id == p1_uid
+
+    # P1 attacks P2 (already adjacent, no move needed)
+    initial_morale = state.team2_morale
+    result = do_attack(state, p2_uid)
+    if state.phase != Phase.VICTORY:
+        assert state.team2_morale == max(0, initial_morale - result.net_damage)
+
+    # End P1 activation
+    if state.phase == Phase.ACTIVATION:
+        end_activation(state)
+        assert state.last_activated[1] == p1_uid
+        assert state.activation_index == 1
+
+    # P2 activates (activation_index=1 → team 2)
+    if state.phase == Phase.ACTIVATION:
+        roll2 = begin_activation(state, p2_uid)
+        assert 1 <= roll2 <= 6
+
+        # P2 moves one step
+        src = state.board.unit_positions[p2_uid]
+        dest = Coordinate(col=src.col, row=max(0, src.row - 1))
+        if dest != src and state.board.is_passable(dest):
+            do_move(state, dest)
+
+        end_activation(state)
+        assert state.last_activated[2] == p2_uid
+        assert state.activation_index == 2
+        assert state.phase == Phase.ACTIVATION  # 2 more activations remain
