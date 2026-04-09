@@ -6,6 +6,7 @@ import os
 from dataclasses import dataclass
 
 import pygame
+import pygame.freetype
 
 from dice_rangers.board import Board, Coordinate
 from dice_rangers.constants import (
@@ -45,42 +46,46 @@ from dice_rangers.units import VALID_COLORS
 # Font cache
 # ---------------------------------------------------------------------------
 
-_font_cache: dict[int, pygame.font.Font] = {}
+_font_cache: dict[int, pygame.freetype.Font] = {}
 _FONT_DIR = os.path.join(os.path.dirname(__file__), "..", "assets", "fonts")
 
 
-def get_font(size: int) -> pygame.font.Font:
-    """Return a cached font at the given size.
-
-    Tries to load a .ttf file from assets/fonts/ first; falls back to the
-    Pygame default font, then SysFont as a last resort.
-    """
+def get_font(size: int) -> pygame.freetype.Font:
+    """Return a cached freetype font at the given size."""
     if size in _font_cache:
         return _font_cache[size]
 
-    # Ensure font module is initialized
-    if not pygame.font.get_init():
-        pygame.font.init()
+    font = None
 
-    font: pygame.font.Font | None = None
+    # Try loading a .ttf from assets/fonts/
     if os.path.isdir(_FONT_DIR):
         for fname in os.listdir(_FONT_DIR):
             if fname.lower().endswith(".ttf"):
                 try:
-                    font = pygame.font.Font(os.path.join(_FONT_DIR, fname), size)
+                    font = pygame.freetype.Font(os.path.join(_FONT_DIR, fname), size)
                     break
                 except Exception:
                     font = None
 
-    # Fallback: try default font, then SysFont
+    # Fallback: freetype default font (None = built-in default)
     if font is None:
         try:
-            font = pygame.font.Font(None, size)
+            font = pygame.freetype.Font(None, size)
         except Exception:
-            try:
-                font = pygame.font.SysFont(None, size)
-            except Exception:
-                font = pygame.font.SysFont("arial", size)
+            pass
+
+    # Fallback: SysFont if available
+    if font is None and hasattr(pygame.freetype, "SysFont"):
+        try:
+            font = pygame.freetype.SysFont("arial", size)
+        except Exception:
+            pass
+
+    if font is None:
+        raise RuntimeError(
+            "Could not initialize any font. Ensure pygame is installed correctly "
+            "and SDL_ttf or freetype libraries are available."
+        )
 
     _font_cache[size] = font
     return font
@@ -95,9 +100,9 @@ def init_display() -> pygame.Surface:
     """Initialize Pygame and return the display surface."""
     pygame.init()
     try:
-        pygame.font.init()
+        pygame.freetype.init()
     except Exception:
-        pass  # Font init may fail on some platforms; get_font handles fallback
+        pass  # freetype init failure handled gracefully in get_font
     screen = pygame.display.set_mode((WINDOW_SIZE, WINDOW_SIZE))
     pygame.display.set_caption("Dice Rangers")
     return screen
@@ -173,14 +178,14 @@ def draw_grid(surface: pygame.Surface) -> None:
 
     # Column labels (A–H) along the top
     for col in range(GRID_SIZE):
-        label = font.render(columns[col], True, COLOR_TEXT_DIM)
+        label = font.render(columns[col], fgcolor=COLOR_TEXT_DIM)[0]
         x = GRID_ORIGIN_X + col * TILE_SIZE + TILE_SIZE // 2 - label.get_width() // 2
         y = GRID_ORIGIN_Y - label.get_height() - 2
         surface.blit(label, (x, max(0, y)))
 
     # Row labels (1–8) along the left
     for row in range(GRID_SIZE):
-        label = font.render(str(row + 1), True, COLOR_TEXT_DIM)
+        label = font.render(str(row + 1), fgcolor=COLOR_TEXT_DIM)[0]
         x = GRID_ORIGIN_X - label.get_width() - 2
         y = GRID_ORIGIN_Y + row * TILE_SIZE + TILE_SIZE // 2 - label.get_height() // 2
         surface.blit(label, (max(0, x), y))
@@ -238,7 +243,7 @@ def draw_items(surface: pygame.Surface, board: Board) -> None:
         color = _ITEM_COLORS.get(item_id, COLOR_ITEM_HEAL)
         pygame.draw.circle(surface, color, (cx, cy), ITEM_RADIUS)
         symbol = _ITEM_SYMBOLS.get(item_id, "?")
-        text = font.render(symbol, True, COLOR_TEXT)
+        text = font.render(symbol, fgcolor=COLOR_TEXT)[0]
         surface.blit(text, (cx - text.get_width() // 2, cy - text.get_height() // 2))
 
 
@@ -293,7 +298,7 @@ def draw_units(surface: pygame.Surface, state: GameState) -> None:
 
             # Race letter in center
             letter = _RACE_LETTERS.get(unit.customization.race, "?")
-            text = font.render(letter, True, COLOR_TEXT)
+            text = font.render(letter, fgcolor=COLOR_TEXT)[0]
             surface.blit(
                 text, (cx - text.get_width() // 2, cy - text.get_height() // 2)
             )
@@ -309,7 +314,7 @@ def draw_units(surface: pygame.Surface, state: GameState) -> None:
             indicator_x = cx
             indicator_y = cy - UNIT_RADIUS - 4
             if unit.atk_boost_active:
-                atk_text = small_font.render("▲", True, (220, 60, 60))
+                atk_text = small_font.render("▲", fgcolor=(220, 60, 60))[0]
                 surface.blit(
                     atk_text,
                     (
@@ -319,7 +324,7 @@ def draw_units(surface: pygame.Surface, state: GameState) -> None:
                 )
                 indicator_y -= atk_text.get_height()
             if unit.def_boost_active:
-                def_text = small_font.render("■", True, (60, 100, 220))
+                def_text = small_font.render("■", fgcolor=(60, 100, 220))[0]
                 surface.blit(
                     def_text,
                     (
@@ -363,13 +368,13 @@ def draw_hud(surface: pygame.Surface, state: GameState) -> None:
     # Helper to draw a semi-transparent background behind text
     def draw_overlay_text(
         text: str,
-        font: pygame.font.Font,
+        font: pygame.freetype.Font,
         color: tuple[int, int, int],
         x: int,
         y: int,
         padding: int = 4,
     ) -> None:
-        rendered = font.render(text, True, color)
+        rendered = font.render(text, fgcolor=color)[0]
         bg = pygame.Surface(
             (rendered.get_width() + padding * 2, rendered.get_height() + padding * 2),
             pygame.SRCALPHA,
@@ -386,13 +391,13 @@ def draw_hud(surface: pygame.Surface, state: GameState) -> None:
 
     # P2 morale — top-right
     p2_text = f"P2: \u2665 {state.team2_morale}"
-    p2_rendered = morale_font.render(p2_text, True, COLOR_P2)
+    p2_rendered = morale_font.render(p2_text, fgcolor=COLOR_P2)[0]
     p2_x = GRID_ORIGIN_X + GRID_SIZE * TILE_SIZE - p2_rendered.get_width() - 4
     draw_overlay_text(p2_text, morale_font, COLOR_P2, p2_x, GRID_ORIGIN_Y + 4)
 
     # Phase/turn info — bottom-center
     phase_label = _phase_label(state)
-    phase_rendered = phase_font.render(phase_label, True, COLOR_TEXT)
+    phase_rendered = phase_font.render(phase_label, fgcolor=COLOR_TEXT)[0]
     phase_x = WINDOW_SIZE // 2 - phase_rendered.get_width() // 2
     phase_y = GRID_ORIGIN_Y + GRID_SIZE * TILE_SIZE - phase_rendered.get_height() - 6
     draw_overlay_text(phase_label, phase_font, COLOR_TEXT, phase_x, phase_y)
@@ -425,8 +430,10 @@ def draw_banner(surface: pygame.Surface, text: str, sub_text: str = "") -> None:
     big_font = get_font(28)
     sub_font = get_font(18)
 
-    big_rendered = big_font.render(text, True, COLOR_TEXT)
-    sub_rendered = sub_font.render(sub_text, True, COLOR_TEXT) if sub_text else None
+    big_rendered = big_font.render(text, fgcolor=COLOR_TEXT)[0]
+    sub_rendered = (
+        sub_font.render(sub_text, fgcolor=COLOR_TEXT)[0] if sub_text else None
+    )
 
     sub_h = sub_rendered.get_height() + 4 if sub_rendered else 0
     total_h = big_rendered.get_height() + sub_h
@@ -485,7 +492,7 @@ def draw_button(surface: pygame.Surface, button: Button) -> None:
     pygame.draw.rect(surface, bg_color, button.rect, border_radius=6)
 
     font = get_font(16)
-    text = font.render(button.label, True, text_color)
+    text = font.render(button.label, fgcolor=text_color)[0]
     tx = button.rect.centerx - text.get_width() // 2
     ty = button.rect.centery - text.get_height() // 2
     surface.blit(text, (tx, ty))
@@ -507,8 +514,8 @@ def draw_dice_result(surface: pygame.Surface, label: str, value: int) -> None:
     label_font = get_font(16)
     value_font = get_font(32)
 
-    label_rendered = label_font.render(label, True, COLOR_TEXT)
-    value_rendered = value_font.render(str(value), True, COLOR_TEXT)
+    label_rendered = label_font.render(label, fgcolor=COLOR_TEXT)[0]
+    value_rendered = value_font.render(str(value), fgcolor=COLOR_TEXT)[0]
 
     padding = 12
     w = max(label_rendered.get_width(), value_rendered.get_width()) + padding * 2
