@@ -446,11 +446,18 @@ class Button:
     label: str
     enabled: bool = True
     hovered: bool = False
+    # Override background color (for color swatches)
+    bg_color: tuple[int, int, int] | None = None
+    # Stores the ID this button represents (e.g., "race_bird")
+    value: str = ""
 
 
 def draw_button(surface: pygame.Surface, button: Button) -> None:
     """Draw a single button with rounded corners."""
-    if not button.enabled:
+    if button.bg_color is not None:
+        bg_color = button.bg_color
+        text_color = COLOR_TEXT
+    elif not button.enabled:
         bg_color = COLOR_BUTTON_DISABLED
         text_color = COLOR_TEXT_DIM
     elif button.hovered:

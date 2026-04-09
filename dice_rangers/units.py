@@ -147,7 +147,9 @@ def create_unit(unit_id: str, team: int, customization: Customization) -> Unit:
 # ---------------------------------------------------------------------------
 
 
-def move_unit(board: Board, unit: Unit, destination: Coordinate, max_steps: int) -> None:
+def move_unit(
+    board: Board, unit: Unit, destination: Coordinate, max_steps: int
+) -> None:
     """Move a unit to destination if reachable within max_steps.
 
     Raises:
@@ -217,7 +219,8 @@ def resolve_attack(
     ok, is_melee = can_attack(attacker_coord, defender_coord, board)
     if not ok:
         raise ValueError(
-            f"No valid attack from {attacker_coord.to_label()} to {defender_coord.to_label()}."
+            f"No valid attack from {attacker_coord.to_label()}"
+            f" to {defender_coord.to_label()}."
         )
 
     # Roll attack

@@ -6,13 +6,12 @@ from dice_rangers.board import Board, Coordinate
 from dice_rangers.dice import DiceRoller
 from dice_rangers.units import (
     Customization,
-    create_unit,
     can_attack,
+    create_unit,
     move_unit,
     reset_activation,
     resolve_attack,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -203,7 +202,9 @@ def _setup_combat(attacker_coord, defender_coord, seed=42):
 
 
 def test_resolve_attack_net_damage_seeded():
-    board, attacker, defender, roller = _setup_combat(Coordinate(3, 3), Coordinate(4, 3))
+    board, attacker, defender, roller = _setup_combat(
+        Coordinate(3, 3), Coordinate(4, 3)
+    )
     result = resolve_attack(attacker, defender, board, roller)
     # net_damage must be >= 0
     assert result.net_damage >= 0
@@ -213,7 +214,9 @@ def test_resolve_attack_net_damage_seeded():
 
 
 def test_resolve_attack_atk_boost_consumed():
-    board, attacker, defender, roller = _setup_combat(Coordinate(3, 3), Coordinate(4, 3))
+    board, attacker, defender, roller = _setup_combat(
+        Coordinate(3, 3), Coordinate(4, 3)
+    )
     attacker.atk_boost_active = True
     result = resolve_attack(attacker, defender, board, roller)
     assert result.attack_bonus == 2
@@ -221,7 +224,9 @@ def test_resolve_attack_atk_boost_consumed():
 
 
 def test_resolve_attack_def_boost_consumed():
-    board, attacker, defender, roller = _setup_combat(Coordinate(3, 3), Coordinate(4, 3))
+    board, attacker, defender, roller = _setup_combat(
+        Coordinate(3, 3), Coordinate(4, 3)
+    )
     defender.def_boost_active = True
     result = resolve_attack(attacker, defender, board, roller)
     assert result.defense_bonus == 4
@@ -240,14 +245,18 @@ def test_resolve_attack_net_damage_never_negative():
 
 
 def test_resolve_attack_sets_has_acted():
-    board, attacker, defender, roller = _setup_combat(Coordinate(3, 3), Coordinate(4, 3))
+    board, attacker, defender, roller = _setup_combat(
+        Coordinate(3, 3), Coordinate(4, 3)
+    )
     assert attacker.has_acted is False
     resolve_attack(attacker, defender, board, roller)
     assert attacker.has_acted is True
 
 
 def test_resolve_attack_no_valid_attack_raises():
-    board, attacker, defender, roller = _setup_combat(Coordinate(0, 0), Coordinate(7, 7))
+    board, attacker, defender, roller = _setup_combat(
+        Coordinate(0, 0), Coordinate(7, 7)
+    )
     with pytest.raises(ValueError):
         resolve_attack(attacker, defender, board, roller)
 
