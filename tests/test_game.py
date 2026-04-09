@@ -60,8 +60,12 @@ def _setup_through_customization(seed=42) -> GameState:
     state = new_game(seed=seed)
     submit_customization(state, "p1a", 1, _make_customization())
     submit_customization(state, "p1b", 1, _make_customization(variant="parrot"))
-    submit_customization(state, "p2a", 2, _make_customization(race="race_cat", variant="tabby"))
-    submit_customization(state, "p2b", 2, _make_customization(race="race_cat", variant="siamese"))
+    submit_customization(
+        state, "p2a", 2, _make_customization(race="race_cat", variant="tabby")
+    )
+    submit_customization(
+        state, "p2b", 2, _make_customization(race="race_cat", variant="siamese")
+    )
     return state
 
 
@@ -174,7 +178,9 @@ def test_submit_customization_p2_unit1():
     state = new_game()
     submit_customization(state, "p1a", 1, _make_customization())
     submit_customization(state, "p1b", 1, _make_customization(variant="parrot"))
-    submit_customization(state, "p2a", 2, _make_customization(race="race_cat", variant="tabby"))
+    submit_customization(
+        state, "p2a", 2, _make_customization(race="race_cat", variant="tabby")
+    )
     assert len(state.team2_units) == 1
     assert state.phase == Phase.P2_CUSTOMIZE
 
@@ -485,15 +491,20 @@ def _setup_through_activation(seed=42) -> GameState:
 
 
 def test_full_setup_flow():
-    """Full setup flow: new_game → 4 customizations → 8 obstacles → 4 spawns → ROUND_START."""
+    """Full setup flow: new_game → 4 customizations → 8 obstacles → 4 spawns
+    → ROUND_START."""
     state = new_game(seed=42)
 
     # Customization
     submit_customization(state, "p1a", 1, _make_customization())
     submit_customization(state, "p1b", 1, _make_customization(variant="parrot"))
     assert state.phase == Phase.P2_CUSTOMIZE
-    submit_customization(state, "p2a", 2, _make_customization(race="race_cat", variant="tabby"))
-    submit_customization(state, "p2b", 2, _make_customization(race="race_cat", variant="siamese"))
+    submit_customization(
+        state, "p2a", 2, _make_customization(race="race_cat", variant="tabby")
+    )
+    submit_customization(
+        state, "p2b", 2, _make_customization(race="race_cat", variant="siamese")
+    )
     assert state.phase == Phase.OBSTACLE_PLACEMENT
 
     # Obstacle placement — place all 8, track how many landed on the board
@@ -817,7 +828,7 @@ def _setup_unit_with_item(item_id="item_heal", seed=42):
 def test_do_use_item_heal_increases_morale():
     state, uid = _setup_unit_with_item("item_heal")
     state.team1_morale = 10
-    result = do_use_item(state)
+    do_use_item(state)
     assert state.team1_morale > 10
 
 
@@ -957,10 +968,14 @@ def test_end_activation_increments_round_number_after_4():
     p2b = state.team2_units[1].unit_id
 
     initial_round = state.round_number
-    begin_activation(state, p1a); end_activation(state)
-    begin_activation(state, p2a); end_activation(state)
-    begin_activation(state, p1b); end_activation(state)
-    begin_activation(state, p2b); end_activation(state)
+    begin_activation(state, p1a)
+    end_activation(state)
+    begin_activation(state, p2a)
+    end_activation(state)
+    begin_activation(state, p1b)
+    end_activation(state)
+    begin_activation(state, p2b)
+    end_activation(state)
 
     assert state.round_number == initial_round + 1
 
@@ -1128,11 +1143,12 @@ def test_skip_everything_and_end():
 # ---------------------------------------------------------------------------
 
 def test_partial_round_integration():
-    """Seeded test: ROUND_START → event → P1 activate → move → attack P2 → end → P2 activate → move → end."""
+    """Seeded test: ROUND_START → event → P1 activate → move → attack P2
+    → end → P2 activate → move → end."""
     state = _setup_through_round_start(seed=7)
 
     # Round start
-    event = resolve_round_start(state)
+    resolve_round_start(state)
     assert state.phase == Phase.ACTIVATION
     assert state.activation_index == 0
 

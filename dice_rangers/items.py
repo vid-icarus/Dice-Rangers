@@ -13,7 +13,7 @@ from dice_rangers.units import Unit
 # ---------------------------------------------------------------------------
 
 ITEM_TYPES: dict[str, dict] = {
-    "item_heal": {"name": "Healing Potion", "effect": "heal",      "value": HEAL_AMOUNT},
+    "item_heal": {"name": "Healing Potion", "effect": "heal", "value": HEAL_AMOUNT},
     "item_atk":  {"name": "Attack Boost",   "effect": "atk_boost", "value": ATK_BOOST},
     "item_def":  {"name": "Defense Boost",  "effect": "def_boost", "value": DEF_BOOST},
 }
@@ -63,7 +63,9 @@ def pickup_item(board: Board, unit: Unit) -> PickupResult:
         unit.carrying_item = new_item_id
         del board.item_positions[unit_coord]
         unit.has_acted = True
-        return PickupResult(picked_up=new_item_id, dropped=None, needs_drop_location=False)
+        return PickupResult(
+            picked_up=new_item_id, dropped=None, needs_drop_location=False
+        )
     else:
         # Swap: drop old item, pick up new one
         old_item_id = unit.carrying_item
@@ -83,7 +85,8 @@ def pickup_item(board: Board, unit: Unit) -> PickupResult:
 
 
 def get_valid_drop_squares(board: Board, coord: Coordinate) -> list[Coordinate]:
-    """Return adjacent squares that are completely empty (no obstacle, unit, or item)."""
+    """Return adjacent squares that are completely empty (no obstacle, unit, or item).
+    """
     return [sq for sq in board.get_adjacent_squares(coord) if board.is_empty(sq)]
 
 

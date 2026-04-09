@@ -14,15 +14,18 @@ import pytest
 os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
 os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
 
-from dice_rangers.board import Coordinate
-from dice_rangers.constants import (
+# Skip entire module if pygame is not installed (headless/CI environments)
+pygame = pytest.importorskip("pygame")
+
+from dice_rangers.board import Coordinate  # noqa: E402
+from dice_rangers.constants import (  # noqa: E402
     GRID_ORIGIN_X,
     GRID_ORIGIN_Y,
     GRID_SIZE,
     TILE_SIZE,
     WINDOW_SIZE,
 )
-from dice_rangers.renderer import grid_to_pixel, pixel_to_grid
+from dice_rangers.renderer import grid_to_pixel, pixel_to_grid  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # grid_to_pixel tests

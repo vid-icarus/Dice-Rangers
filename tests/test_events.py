@@ -1,12 +1,9 @@
 """Tests for events.py — board event resolution."""
 
-import pytest
 
 from dice_rangers.board import Board, Coordinate
 from dice_rangers.constants import GRID_SIZE
-from dice_rangers.dice import DiceRoller
 from dice_rangers.events import resolve_board_event
-
 
 # ---------------------------------------------------------------------------
 # Helpers
