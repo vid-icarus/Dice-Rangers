@@ -53,10 +53,14 @@ def get_font(size: int) -> pygame.font.Font:
     """Return a cached font at the given size.
 
     Tries to load a .ttf file from assets/fonts/ first; falls back to the
-    Pygame default font.
+    Pygame default font, then SysFont as a last resort.
     """
     if size in _font_cache:
         return _font_cache[size]
+
+    # Ensure font module is initialized
+    if not pygame.font.get_init():
+        pygame.font.init()
 
     font: pygame.font.Font | None = None
     if os.path.isdir(_FONT_DIR):
@@ -68,8 +72,15 @@ def get_font(size: int) -> pygame.font.Font:
                 except Exception:
                     font = None
 
+    # Fallback: try default font, then SysFont
     if font is None:
-        font = pygame.font.Font(None, size)
+        try:
+            font = pygame.font.Font(None, size)
+        except Exception:
+            try:
+                font = pygame.font.SysFont(None, size)
+            except Exception:
+                font = pygame.font.SysFont("arial", size)
 
     _font_cache[size] = font
     return font
@@ -83,6 +94,10 @@ def get_font(size: int) -> pygame.font.Font:
 def init_display() -> pygame.Surface:
     """Initialize Pygame and return the display surface."""
     pygame.init()
+    try:
+        pygame.font.init()
+    except Exception:
+        pass  # Font init may fail on some platforms; get_font handles fallback
     screen = pygame.display.set_mode((WINDOW_SIZE, WINDOW_SIZE))
     pygame.display.set_caption("Dice Rangers")
     return screen
