@@ -69,6 +69,10 @@ class UIState:
     input_locked: bool
     lock_timer: float  # Seconds remaining; 0 = unlocked
 
+    # App-level flags
+    restart_requested: bool  # app.py checks and resets game
+    quit_requested: bool     # app.py checks and exits
+
 
 # ---------------------------------------------------------------------------
 # Factory
@@ -96,6 +100,8 @@ def new_ui_state() -> UIState:
         selected_action=None,
         input_locked=False,
         lock_timer=0.0,
+        restart_requested=False,
+        quit_requested=False,
     )
 
 
@@ -204,7 +210,10 @@ def handle_event(
         handle_obstacle_event(event_type, event_pos, event_key, state, ui)
     elif ui.screen == "spawn":
         handle_spawn_event(event_type, event_pos, event_key, state, ui)
-    # "gameplay" and "victory" handled in Part 2
+    elif ui.screen == "gameplay":
+        handle_gameplay_event(event_type, event_pos, event_key, state, ui)
+    elif ui.screen == "victory":
+        handle_victory_event(event_type, event_pos, event_key, state, ui)
 
 
 # ---------------------------------------------------------------------------
@@ -429,12 +438,361 @@ def handle_spawn_event(
             f"Place Unit {state.units_spawned_this_player + 1}"
         )
     elif state.phase == Phase.ROUND_START:
-        ui.screen = "gameplay"
-        ui.highlights_move = set()
-        ui.spawn_valid_squares = set()
-        ui.banner_text = "Battle Begins!"
-        ui.banner_sub = ""
-        ui.banner_timer = 2.0
+        enter_gameplay(state, ui)
+
+
+# ---------------------------------------------------------------------------
+# Item name helper
+# ---------------------------------------------------------------------------
+
+_ITEM_NAMES = {
+    "item_heal": "Healing Potion",
+    "item_atk": "Attack Boost",
+    "item_def": "Defense Boost",
+}
+
+
+def _item_name(item_id: str) -> str:
+    return _ITEM_NAMES.get(item_id, item_id)
+
+
+# ---------------------------------------------------------------------------
+# Highlight clearing
+# ---------------------------------------------------------------------------
+
+def _clear_all_highlights(ui: UIState) -> None:
+    ui.highlights_move = set()
+    ui.highlights_attack = set()
+    ui.highlights_select = set()
+    ui.highlights_drop = set()
+
+
+# ---------------------------------------------------------------------------
+# Gameplay entry points
+# ---------------------------------------------------------------------------
+
+def enter_gameplay(state: GameState, ui: UIState) -> None:
+    """Transition to the gameplay screen and start the first round."""
+    ui.screen = "gameplay"
+    _clear_all_highlights(ui)
+    ui.buttons = []
+    enter_round_start(state, ui)
+
+
+def enter_round_start(state: GameState, ui: UIState) -> None:
+    """Resolve the round-start board event and show a banner."""
+    from dice_rangers.game import resolve_round_start
+
+    event = resolve_round_start(state)
+    if event.event_type == "spawn_heal":
+        banner_sub = "A Healing Potion appeared!"
+    elif event.event_type == "spawn_atk":
+        banner_sub = "An Attack Boost appeared!"
+    elif event.event_type == "spawn_def":
+        banner_sub = "A Defense Boost appeared!"
+    else:
+        banner_sub = "No board event"
+
+    ui.banner_text = f"Round {state.round_number}"
+    ui.banner_sub = banner_sub
+    ui.banner_timer = 2.0
+    ui.input_locked = True
+    ui.lock_timer = 2.0
+    ui.buttons = []
+
+
+def enter_unit_selection(state: GameState, ui: UIState) -> None:
+    """Set up the unit selection phase for the current team."""
+    from dice_rangers.game import get_choosable_units
+
+    team = 1 if state.activation_index % 2 == 0 else 2
+    choosable = get_choosable_units(state)
+    _clear_all_highlights(ui)
+    for unit_id in choosable:
+        pos = state.board.unit_positions.get(unit_id)
+        if pos is not None:
+            ui.highlights_select.add(pos)
+    ui.banner_text = f"Player {team}'s Turn"
+    ui.banner_sub = "Click a unit to activate"
+    ui.banner_timer = 0  # permanent
+    ui.buttons = []
+    ui.selected_action = None
+
+
+def enter_action_phase(state: GameState, ui: UIState) -> None:
+    """Set up the action buttons for the currently active unit."""
+    from dice_rangers.game import get_valid_actions
+
+    actions = get_valid_actions(state)
+    _clear_all_highlights(ui)
+
+    # Highlight the active unit's position
+    if state.active_unit_id is not None:
+        pos = state.board.unit_positions.get(state.active_unit_id)
+        if pos is not None:
+            ui.highlights_select.add(pos)
+
+    team = 1 if (state.activation_index - 1) % 2 == 0 else 2
+
+    # Build action buttons in a horizontal row centred at y≈740
+    button_defs = [
+        ("Move", "move", actions.get("move", False)),
+        ("Attack", "attack", actions.get("attack", False)),
+        ("Use Item", "use_item", actions.get("use_item", False)),
+        ("Skip", "skip", actions.get("skip", False)),
+        ("End Turn", "end_turn", True),
+    ]
+    btn_w, btn_h, gap = 120, 40, 10
+    total_w = len(button_defs) * btn_w + (len(button_defs) - 1) * gap
+    start_x = (800 - total_w) // 2
+    y = 740
+    ui.buttons = []
+    for i, (label, value, enabled) in enumerate(button_defs):
+        x = start_x + i * (btn_w + gap)
+        ui.buttons.append({
+            "rect": (x, y, btn_w, btn_h),
+            "label": label,
+            "enabled": enabled,
+            "value": value,
+            "bg_color": None,
+            "hovered": False,
+        })
+
+    ui.banner_text = f"Player {team}'s Turn"
+    ui.banner_sub = f"Unit: {state.active_unit_id}"
+    ui.banner_timer = 0
+    ui.selected_action = None
+
+
+def enter_item_drop(state: GameState, ui: UIState) -> None:
+    """Set up the item drop phase."""
+    from dice_rangers.game import get_drop_squares
+
+    drop_squares = get_drop_squares(state)
+    _clear_all_highlights(ui)
+    for sq in drop_squares:
+        ui.highlights_drop.add(sq)
+    ui.banner_text = "Drop Item"
+    ui.banner_sub = "Click a highlighted square to drop your old item"
+    ui.banner_timer = 0
+    ui.buttons = []
+
+
+def enter_victory(state: GameState, ui: UIState) -> None:
+    """Transition to the victory screen."""
+    ui.screen = "victory"
+    _clear_all_highlights(ui)
+    ui.banner_text = f"Player {state.winner} Wins!"
+    ui.banner_sub = "Congratulations!"
+    ui.banner_timer = 0
+    ui.buttons = [
+        {
+            "rect": (300, 500, 200, 50),
+            "label": "Play Again",
+            "enabled": True,
+            "value": "play_again",
+            "bg_color": None,
+            "hovered": False,
+        },
+        {
+            "rect": (300, 560, 200, 50),
+            "label": "Quit",
+            "enabled": True,
+            "value": "quit",
+            "bg_color": None,
+            "hovered": False,
+        },
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Gameplay event handler
+# ---------------------------------------------------------------------------
+
+def handle_gameplay_event(
+    event_type: int,
+    event_pos: tuple[int, int] | None,
+    event_key: int | None,
+    state: GameState,
+    ui: UIState,
+) -> None:
+    """Handle events on the gameplay screen."""
+    from dice_rangers.game import (
+        Phase,
+        begin_activation,
+        do_attack,
+        do_drop_item,
+        do_move,
+        do_skip_action,
+        do_use_item,
+        end_activation,
+        get_attackable_targets,
+        get_choosable_units,
+        get_reachable_squares,
+    )
+
+    if ui.input_locked:
+        return
+
+    if event_type != MOUSEBUTTONDOWN or event_pos is None:
+        return
+
+    # ------------------------------------------------------------------
+    # ITEM_DROP phase — short-circuit to drop handling first
+    # ------------------------------------------------------------------
+    if state.phase == Phase.ITEM_DROP:
+        coord = _pixel_to_grid(event_pos[0], event_pos[1])
+        if coord is not None and coord in ui.highlights_drop:
+            do_drop_item(state, coord)
+            enter_action_phase(state, ui)
+        return
+
+    # ------------------------------------------------------------------
+    # No active unit → unit selection mode
+    # ------------------------------------------------------------------
+    if state.active_unit_id is None:
+        coord = _pixel_to_grid(event_pos[0], event_pos[1])
+        if coord is None:
+            return
+        choosable = get_choosable_units(state)
+        # Find which choosable unit is at this coordinate
+        chosen_id = None
+        for unit_id in choosable:
+            if state.board.unit_positions.get(unit_id) == coord:
+                chosen_id = unit_id
+                break
+        if chosen_id is None:
+            return
+        roll = begin_activation(state, chosen_id)
+        ui.dice_label = "Movement Roll"
+        ui.dice_value = roll
+        ui.dice_text = str(roll)
+        ui.dice_timer = 3.0
+        enter_action_phase(state, ui)
+        return
+
+    # ------------------------------------------------------------------
+    # Active unit exists — check button clicks first
+    # ------------------------------------------------------------------
+    btn = button_at(ui, event_pos)
+    if btn is not None and btn.get("enabled", True):
+        value = btn.get("value")
+
+        if value == "move":
+            ui.selected_action = "move"
+            reachable = get_reachable_squares(state)
+            ui.highlights_attack = set()
+            ui.highlights_move = reachable
+            ui.banner_sub = "Click a square to move"
+
+        elif value == "attack":
+            ui.selected_action = "attack"
+            targets = get_attackable_targets(state)
+            ui.highlights_move = set()
+            ui.highlights_attack = set()
+            for tid in targets:
+                pos = state.board.unit_positions.get(tid)
+                if pos is not None:
+                    ui.highlights_attack.add(pos)
+            ui.banner_sub = "Click an enemy to attack"
+
+        elif value == "use_item":
+            result = do_use_item(state)
+            if result.buff_activated is None:
+                ui.banner_sub = f"Healed! Morale: {result.new_morale}"
+            elif result.buff_activated == "atk_boost":
+                ui.banner_sub = "Attack Boost activated!"
+            elif result.buff_activated == "def_boost":
+                ui.banner_sub = "Defense Boost activated!"
+            ui.banner_timer = 1.5
+            enter_action_phase(state, ui)
+
+        elif value == "skip":
+            do_skip_action(state)
+            enter_action_phase(state, ui)
+
+        elif value == "end_turn":
+            end_activation(state)
+            _clear_all_highlights(ui)
+            ui.buttons = []
+            ui.selected_action = None
+            if state.phase == Phase.ROUND_START:
+                enter_round_start(state, ui)
+            elif state.phase == Phase.ACTIVATION:
+                enter_unit_selection(state, ui)
+            elif state.phase == Phase.VICTORY:
+                enter_victory(state, ui)
+
+        return
+
+    # ------------------------------------------------------------------
+    # Grid click with active unit
+    # ------------------------------------------------------------------
+    coord = _pixel_to_grid(event_pos[0], event_pos[1])
+    if coord is None:
+        return
+
+    if ui.selected_action == "move":
+        if coord in ui.highlights_move:
+            result = do_move(state, coord)
+            if result is not None:
+                ui.banner_sub = f"Picked up {_item_name(result.picked_up)}!"
+                ui.banner_timer = 1.5
+                if state.phase == Phase.ITEM_DROP:
+                    enter_item_drop(state, ui)
+                    return
+            enter_action_phase(state, ui)
+
+    elif ui.selected_action == "attack":
+        if coord in ui.highlights_attack:
+            # Find the enemy unit at this coordinate
+            target_id = None
+            for uid, pos in state.board.unit_positions.items():
+                if pos == coord:
+                    target_id = uid
+                    break
+            if target_id is None:
+                return
+            result = do_attack(state, target_id)
+            ui.dice_label = "Melee Attack" if result.is_melee else "Ranged Attack"
+            ui.dice_value = result.attack_roll
+            ui.dice_text = (
+                f"Atk: {result.attack_roll}+{result.attack_bonus} vs "
+                f"Def: {result.defense_roll}+{result.defense_bonus} = "
+                f"{result.net_damage} dmg"
+            )
+            ui.dice_timer = 3.0
+            ui.banner_sub = f"{result.net_damage} damage!"
+            ui.banner_timer = 2.0
+            if state.phase == Phase.VICTORY:
+                ui.input_locked = True
+                ui.lock_timer = 1.5
+            else:
+                enter_action_phase(state, ui)
+
+
+# ---------------------------------------------------------------------------
+# Victory event handler
+# ---------------------------------------------------------------------------
+
+def handle_victory_event(
+    event_type: int,
+    event_pos: tuple[int, int] | None,
+    event_key: int | None,
+    state: GameState,
+    ui: UIState,
+) -> None:
+    """Handle events on the victory screen."""
+    if event_type != MOUSEBUTTONDOWN or event_pos is None:
+        return
+    btn = button_at(ui, event_pos)
+    if btn is None:
+        return
+    value = btn.get("value")
+    if value == "play_again":
+        ui.restart_requested = True
+    elif value == "quit":
+        ui.quit_requested = True
 
 
 # ---------------------------------------------------------------------------
