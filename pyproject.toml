@@ -3,7 +3,7 @@ name = "dice-rangers"
 version = "0.1.0"
 description = "A grid-based hot-seat arena battling game"
 requires-python = ">=3.12"
-dependencies = ["pygame>=2.5.0"]
+dependencies = ["pygame-ce>=2.5.0"]
 
 [project.optional-dependencies]
 dev = ["pytest>=7.0", "ruff>=0.4.0"]
